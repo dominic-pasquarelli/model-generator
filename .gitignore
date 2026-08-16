@@ -1,2 +1,3 @@
+# Python bytecode from running the doc-audit tooling
 __pycache__/
 *.pyc
