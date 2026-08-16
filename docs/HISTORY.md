@@ -30,3 +30,7 @@ Owner-confirmed seed ideas preserved:
 
 Established product vision, workflow docs, conceptual architecture, tool contract, documentation specification, audit protocol, ADR foundation, generated map, and lightweight documentation audit tooling. Product implementation remains deliberately unbuilt.
 
+## 2026-08-16 - UI mockup direction pass
+
+Added nine static Board Mount Designer UI mockups under `docs/design/` — rendered PNGs plus the hand-authored HTML/SVG sources and render script — covering the minimum user journey and every required early state from UX Vision. The mockups are Direction only: they encode the workflow rail, 2D/3D workspace shape, state vocabulary chips, validation honesty, and export gating without claiming any feature is Built or Verified. The interactive UX spike with usability notes remains open in NEXT.
+

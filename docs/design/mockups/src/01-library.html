@@ -1,0 +1,133 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>01 — Project &amp; tool library</title>
+<link rel="stylesheet" href="mockup.css">
+<style>
+  .content { flex: 1; overflow: hidden; padding: 26px 0; }
+  .container { width: 1128px; margin: 0 auto; }
+  .pagehead { display: flex; align-items: flex-end; gap: 12px; margin-bottom: 18px; }
+  .pagehead h1 { font-size: 21px; font-weight: 700; letter-spacing: -0.02em; }
+  .pagehead .sub { font-size: 12px; color: var(--text-3); margin-top: 4px; }
+  .pagehead .actions { margin-left: auto; display: flex; gap: 8px; }
+
+  .pcards { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 26px; }
+  .pcard { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-1); overflow: hidden; }
+  .pthumb { height: 118px; background: linear-gradient(180deg, #1a2029, #141922); display: flex; align-items: center; justify-content: center; border-bottom: 1px solid var(--border); }
+  .pbody { padding: 11px 13px 13px; }
+  .pname { font-size: 13px; font-weight: 650; letter-spacing: -0.01em; }
+  .ptool { font-size: 11px; color: var(--accent); font-weight: 600; margin-top: 2px; }
+  .pmeta { font-size: 11px; color: var(--text-3); margin-top: 5px; }
+  .pchips { display: flex; gap: 5px; margin-top: 9px; }
+  .pcard-new { border: 1.5px dashed var(--border-strong); background: transparent; box-shadow: none; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; color: var(--text-2); min-height: 226px; border-radius: var(--radius-lg); }
+  .pcard-new .plus { width: 34px; height: 34px; border-radius: 50%; background: var(--panel); border: 1px solid var(--border-strong); display: flex; align-items: center; justify-content: center; box-shadow: var(--shadow-1); }
+  .pcard-new .t { font-size: 12.5px; font-weight: 650; }
+  .pcard-new .d { font-size: 11px; color: var(--text-3); }
+
+  .sechead { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+  .sechead h2 { font-size: 15px; font-weight: 700; letter-spacing: -0.01em; }
+  .sechead .sub { font-size: 11.5px; color: var(--text-3); }
+
+  .tcards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 22px; }
+  .tcard { background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-1); padding: 15px; display: flex; gap: 12px; }
+  .ttile { width: 40px; height: 40px; border-radius: 10px; flex: none; display: flex; align-items: center; justify-content: center; }
+  .ttile-active { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-border); }
+  .ttile-muted { background: var(--panel-3); color: var(--text-3); border: 1px solid var(--border); }
+  .ttile .ic { width: 19px; height: 19px; }
+  .tbody { flex: 1; min-width: 0; }
+  .tname { font-size: 13px; font-weight: 650; display: flex; align-items: center; gap: 8px; }
+  .tdesc { font-size: 11.5px; color: var(--text-2); line-height: 1.5; margin-top: 4px; }
+  .tacts { margin-top: 10px; display: flex; gap: 6px; align-items: center; }
+  .tcard.is-muted { opacity: 0.66; }
+  .tcard-ghost { border: 1.5px dashed var(--border-strong); background: transparent; box-shadow: none; display: flex; align-items: center; justify-content: center; color: var(--text-3); font-size: 12px; text-align: center; padding: 15px 30px; line-height: 1.55; }
+
+  .localstrip { display: flex; align-items: center; gap: 10px; background: var(--info-bg); border: 1px solid var(--info-border); color: var(--info); border-radius: 10px; padding: 10px 14px; font-size: 12px; }
+  .localstrip b { font-weight: 650; }
+</style></head>
+<body>
+<div class="frame">
+
+  <div class="topbar">
+    <div class="logo"><svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-4.8L3 8v8l9 4.8L21 16z"/><path d="M3 8l9 4.6L21 8"/><path d="M12 12.6V20.8"/></svg></div>
+    <div class="appname">Model Generator</div>
+    <div class="crumb"><span class="sep">/</span><span class="here">Library</span></div>
+    <div class="spacer"></div>
+    <div class="badge"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg>Local workspace — no account</div>
+    <button class="iconbtn"><svg class="ic" viewBox="0 0 24 24"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/><circle cx="9" cy="7" r="2" fill="#fff"/><circle cx="15" cy="12" r="2" fill="#fff"/><circle cx="7" cy="17" r="2" fill="#fff"/></svg></button>
+  </div>
+
+  <div class="content"><div class="container">
+
+    <div class="pagehead">
+      <div>
+        <h1>Projects</h1>
+        <div class="sub">Files in <span class="mono">~/ModelGenerator/projects</span> · saved on this device</div>
+      </div>
+      <div class="actions">
+        <button class="btn"><svg class="ic" viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>Open project…</button>
+        <button class="btn btn-primary"><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>New project</button>
+      </div>
+    </div>
+
+    <div class="pcards">
+      <div class="pcard">
+        <div class="pthumb"><svg width="150" height="96" viewBox="0 0 150 96"><rect x="24" y="16" width="102" height="64" rx="5" fill="none" stroke="#3fd0e4" stroke-width="1.8"/><circle cx="34" cy="26" r="3.4" fill="none" stroke="#8b93f8" stroke-width="1.6"/><circle cx="116" cy="26" r="3.4" fill="none" stroke="#8b93f8" stroke-width="1.6"/><circle cx="34" cy="70" r="3.4" fill="none" stroke="#8b93f8" stroke-width="1.6"/><circle cx="116" cy="70" r="3.4" fill="none" stroke="#8b93f8" stroke-width="1.6"/><rect x="98" y="38" width="34" height="20" fill="none" stroke="#f4695f" stroke-width="1.4" stroke-dasharray="3 2.4"/></svg></div>
+        <div class="pbody">
+          <div class="pname">cm4-carrier-mount-a</div>
+          <div class="ptool">Board Mount Designer</div>
+          <div class="pmeta">Edited 2 h ago · 1 board · 1 mount draft</div>
+          <div class="pchips"><span class="chip chip-neutral">In progress</span><span class="chip chip-measured"><svg class="ic" viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21l-4-4z"/><path d="M8 12l2 2M11 9l2 2M14 6l2 2"/></svg>Calibrated</span></div>
+        </div>
+      </div>
+      <div class="pcard">
+        <div class="pthumb"><svg width="150" height="96" viewBox="0 0 150 96"><path d="M40 16h70v40h-24v24H40z" fill="none" stroke="#3fd0e4" stroke-width="1.8"/><circle cx="50" cy="26" r="3.4" fill="none" stroke="#8b93f8" stroke-width="1.6"/><circle cx="100" cy="26" r="3.4" fill="none" stroke="#8b93f8" stroke-width="1.6"/><circle cx="50" cy="70" r="3.4" fill="none" stroke="#8b93f8" stroke-width="1.6"/><rect x="58" y="34" width="26" height="16" fill="none" stroke="#f4695f" stroke-width="1.4" stroke-dasharray="3 2.4"/></svg></div>
+        <div class="pbody">
+          <div class="pname">sensor-node-bracket</div>
+          <div class="ptool">Board Mount Designer</div>
+          <div class="pmeta">Edited yesterday · 1 board · 2 mounts</div>
+          <div class="pchips"><span class="chip chip-generated"><svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-4.8L3 8v8l9 4.8L21 16z"/></svg>Generated</span><span class="chip chip-neutral">2 strategies</span></div>
+        </div>
+      </div>
+      <div class="pcard">
+        <div class="pthumb"><svg width="150" height="96" viewBox="0 0 150 96"><rect x="34" y="22" width="82" height="52" rx="4" fill="none" stroke="#3fd0e4" stroke-width="1.8" stroke-dasharray="5 4" opacity="0.75"/><circle cx="44" cy="32" r="3.4" fill="none" stroke="#67707f" stroke-width="1.6"/><circle cx="106" cy="64" r="3.4" fill="none" stroke="#67707f" stroke-width="1.6"/></svg></div>
+        <div class="pbody">
+          <div class="pname">relay-driver-mount</div>
+          <div class="ptool">Board Mount Designer</div>
+          <div class="pmeta">Edited Aug 12 · 1 board</div>
+          <div class="pchips"><span class="chip chip-neutral">Draft</span><span class="chip chip-uncal"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3"/></svg>Uncalibrated</span></div>
+        </div>
+      </div>
+      <div class="pcard-new">
+        <div class="plus"><svg class="ic" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg></div>
+        <div class="t">New project</div>
+        <div class="d">Start from a board photo or drawing</div>
+      </div>
+    </div>
+
+    <div class="sechead"><h2>Tools</h2><div class="sub">Focused workspaces — each one useful on its own</div></div>
+    <div class="tcards">
+      <div class="tcard">
+        <div class="ttile ttile-active"><svg class="ic" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9" r="1.6"/><circle cx="15" cy="15" r="1.6"/><path d="M9 15h3M15 9v3"/></svg></div>
+        <div class="tbody">
+          <div class="tname">Board Mount Designer <span class="chip chip-confirmed"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg>Available</span></div>
+          <div class="tdesc">Turn a board photo or drawing plus trusted measurements into a validated, reusable, exportable mount.</div>
+          <div class="tacts"><button class="btn btn-sm btn-primary">New Board Mount project</button></div>
+        </div>
+      </div>
+      <div class="tcard is-muted">
+        <div class="ttile ttile-muted"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="12" width="8" height="8" rx="1.5"/><rect x="13" y="12" width="8" height="8" rx="1.5"/><rect x="8" y="3" width="8" height="8" rx="1.5"/></svg></div>
+        <div class="tbody">
+          <div class="tname">Board Mount Assembly <span class="chip chip-neutral">Planned — future scope</span></div>
+          <div class="tdesc">Compose saved board and mount definitions into larger structures — stacking, clearances, wire paths, serviceability.</div>
+          <div class="tacts"><button class="btn btn-sm is-disabled">Not available yet</button></div>
+        </div>
+      </div>
+      <div class="tcard-ghost">The toolbox grows one proven tool at a time.<br>Reusable board definitions carry over.</div>
+    </div>
+
+    <div class="localstrip">
+      <svg class="ic" viewBox="0 0 24 24"><rect x="5" y="11" width="14" height="9" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+      <div><b>Local-first.</b> Projects are ordinary files on this device. No account, sync, or upload is required to design and export.</div>
+    </div>
+
+  </div></div>
+</div>
+</body></html>

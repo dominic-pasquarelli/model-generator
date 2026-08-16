@@ -7,6 +7,7 @@ audited: 2026-08-16
 related:
   - docs/PROJECT_VISION.md
   - docs/workflows/BOARD_MOUNT_DESIGNER.md
+  - docs/design/UI_MOCKUPS.md
   - docs/REFERENCES.md
 ---
 
@@ -75,6 +76,8 @@ Use these words precisely:
 ## Required Early States
 
 The first real UX spike should cover empty project, missing image, uncalibrated image, invalid calibration, missing required dimensions, keep-out conflict, export not ready, export in progress, export failure, and export complete.
+
+Static Direction mockups covering these states live in [Board Mount Designer UI Mockups](design/UI_MOCKUPS.md).
 
 ## What A Future Mock Must Not Promise
 
