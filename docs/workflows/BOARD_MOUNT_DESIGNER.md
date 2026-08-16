@@ -22,6 +22,8 @@ Board Mount Designer is the first owner-confirmed value slice. This document is 
 
 The user should be able to create a reusable board definition and a generated mount from a board reference image or drawing plus trustworthy measurements. The output should be inspectable, validated, saved, and exported through supported formats once those formats are decided.
 
+The workflow should also leave room for prototype-to-service mounting: a board mount may need standard attachment interfaces, screw or insert patterns, tab features, bracket locks, or modular slots that make the generated part useful in both quick prototypes and final enclosures.
+
 ## Minimum User Journey
 
 1. Create or open a local project.
@@ -48,6 +50,8 @@ The user should be able to create a reusable board definition and a generated mo
 - keep-out areas or volumes;
 - basic clearance/tolerance settings;
 - mount strategy parameters;
+- optional modular attachment interfaces;
+- hardware choices such as screws, inserts, or magnets when selected;
 - generated result and export metadata.
 
 ## Later Board-Definition Extensions
@@ -59,6 +63,8 @@ The user should be able to create a reusable board definition and a generated mo
 - heat/airflow regions;
 - fastener and insert choices;
 - board-side and enclosure-side attachment interfaces;
+- slot, tab, bracket-lock, or modular grid compatibility;
+- breadboard/prototype adapter relationships;
 - confidence or uncertainty per captured fact;
 - physical-fit corrections tied to board revision and printer/material profile.
 
@@ -72,6 +78,7 @@ Missing data means unknown or not captured. It does not mean zero.
 - Preview and export must derive from the same canonical model or documented shared geometry path.
 - Unit conversions and coordinate systems are centralized and tested.
 - Clearances and tolerances are explicit parameters, not unexplained constants.
+- Modular interface dimensions are selected standards or user-defined parameters, not hidden defaults copied from old notes.
 - Export reports what was generated, with which parameters, and with which project/schema version.
 - The app fails clearly when it cannot produce a trustworthy result instead of silently inventing geometry.
 
@@ -101,4 +108,4 @@ Missing data means unknown or not captured. It does not mean zero.
 - Which export formats are supported in the first slice?
 - What is the minimum project schema for board definitions?
 - What is the first physical-validation fixture?
-
+- Should a modular bracket/mounting interface be part of the first mount strategy or deferred until after a basic board mount is physically validated?

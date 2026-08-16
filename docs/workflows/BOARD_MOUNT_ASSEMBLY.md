@@ -36,6 +36,8 @@ The assembly workflow should combine reusable board/mount definitions into an el
 - enclosure boundary and attachment interfaces;
 - optional airflow or thermal constraints.
 
+It may also become the place where a modular bracket/mounting ecosystem matters most: reusable slots, tabs, screw patterns, threaded inserts, breadboard adapters, wire holders, support legs, extrusion/dowel adapters, and power modules can be composed only if their interfaces are stored semantically.
+
 ## Semantic Composition Rule
 
 Assembly must compose semantic interfaces and constraints, not merely union imported meshes. If Board Mount Designer loses board outline, holes, keep-outs, connector envelopes, clearance requirements, or provenance, this later workflow becomes much harder.
@@ -45,5 +47,5 @@ Assembly must compose semantic interfaces and constraints, not merely union impo
 - No assembly editor in the first implementation slice.
 - No promise of automatic enclosure design.
 - No wiring autorouter until board interfaces and service envelopes exist.
+- No adoption of the old Gen 1 dimensions as a standard without a measured design spike and owner ADR.
 - No physical-fit claim until an assembled structure is fabricated and checked.
-
