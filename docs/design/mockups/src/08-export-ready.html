@@ -1,0 +1,160 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>08 — Export</title>
+<link rel="stylesheet" href="mockup.css">
+<script>if (new URLSearchParams(location.search).get("theme") === "dark") document.documentElement.dataset.theme = "dark";</script>
+<style>
+  .iso { position: absolute; left: 76%; top: 46%; transform: translate(-50%, -50%); width: 600px; opacity: 0.95; }
+  .ready-row { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--text-2); padding: 3px 0; }
+  .ready-row .ic { width: 13px; height: 13px; color: var(--ok); }
+  .fmt { display: flex; gap: 10px; margin-top: 4px; }
+  .fmt-card { flex: 1; border: 1.5px solid var(--border-strong); border-radius: 10px; padding: 11px 12px; position: relative; }
+  .fmt-card.is-on { border-color: var(--accent); background: var(--accent-soft); box-shadow: 0 0 0 3px rgba(79,70,229,0.10); }
+  .fmt-card .radio { position: absolute; top: 11px; right: 11px; width: 15px; height: 15px; border-radius: 50%; border: 1.5px solid var(--border-strong); background: #fff; }
+  .fmt-card.is-on .radio { border-color: var(--accent); box-shadow: inset 0 0 0 3.5px #fff; background: var(--accent); }
+  .fmt-name { font-size: 13px; font-weight: 700; display: flex; align-items: center; gap: 7px; }
+  .fmt-desc { font-size: 11px; color: var(--text-2); margin-top: 4px; line-height: 1.45; }
+  .cbrow { display: flex; gap: 9px; align-items: flex-start; margin-top: 12px; font-size: 12px; color: var(--text-2); }
+  .cb { width: 15px; height: 15px; border-radius: 4px; background: var(--accent); flex: none; display: flex; align-items: center; justify-content: center; color: #fff; margin-top: 1px; }
+  .cb .ic { width: 10px; height: 10px; stroke-width: 3; }
+</style></head>
+<body>
+<div class="frame">
+
+  <div class="topbar">
+    <div class="logo"><svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-4.8L3 8v8l9 4.8L21 16z"/><path d="M3 8l9 4.6L21 8"/><path d="M12 12.6V20.8"/></svg></div>
+    <div class="appname">Model Generator</div>
+    <div class="crumb"><span class="sep">/</span><a>Library</a><span class="sep">/</span><span class="here">cm4-carrier-mount-a</span><span class="chip chip-neutral" style="margin-left:6px">Board Mount Designer</span></div>
+    <div class="spacer"></div>
+    <div class="savestate"><span class="dot"></span>Autosaved 13:30</div>
+    <div class="vdiv"></div>
+    <button class="iconbtn"><svg class="ic" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 7"/></svg></button>
+    <button class="iconbtn"><svg class="ic" viewBox="0 0 24 24"><path d="M21 7v6h-6"/><path d="M21 13a9 9 0 1 1-3-7.7L21 7"/></svg></button>
+    <div class="vdiv"></div>
+    <div class="badge">mm</div>
+    <button class="btn btn-sm btn-primary"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3v12M6 11l6 6 6-6"/><path d="M5 21h14"/></svg>Export</button>
+  </div>
+
+  <div class="main">
+    <div class="rail">
+      <div class="rail-title">Workflow</div>
+      <div class="steps">
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Reference</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Calibrate</span><span class="meta">32.0 px/mm</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Outline</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Holes</span><span class="meta">4 · ✓</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Keep-outs</span><span class="meta">3</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Measurements</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Mount</span></div>
+        <div class="step is-current"><span class="n">8</span><span class="lbl">Preview &amp; export</span></div>
+      </div>
+      <div class="rail-foot">
+        <button class="btn btn-ghost btn-sm" style="justify-content:flex-start"><svg class="ic" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>Back to Library</button>
+        <div class="rail-note">Export writes exactly what was generated — with the parameters and versions that produced it.</div>
+      </div>
+    </div>
+
+    <div class="canvas-wrap">
+      <div class="canvas is-3d">
+        <img class="iso" src="bracket-iso.svg" alt="">
+        <div class="scrim"></div>
+
+        <div class="pop" style="left: 35%; top: 50%; transform: translate(-50%, -50%); width: 560px;">
+          <div class="pop-head">
+            <svg class="ic" viewBox="0 0 24 24" style="color:var(--text-3)"><path d="M12 3v12M6 11l6 6 6-6"/><path d="M5 21h14"/></svg>
+            <div class="pop-title">Export mount</div>
+            <span class="chip chip-confirmed"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg>Ready</span>
+          </div>
+          <div class="pop-body">
+            <div style="display:flex; gap:18px">
+              <div style="flex:1">
+                <div class="insp-title" style="margin-bottom:6px">Readiness</div>
+                <div class="ready-row"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg>Calibrated 32.0 px/mm · caliper source</div>
+                <div class="ready-row"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg>Outline and 4 holes confirmed</div>
+                <div class="ready-row"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg>Board thickness measured · 1.60 mm</div>
+                <div class="ready-row"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg>Generated bracket avoids all keep-outs</div>
+                <div class="ready-row"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg>0 errors · 0 warnings · model v15</div>
+              </div>
+              <div style="width:190px; border-left:1px solid var(--border); padding-left:16px">
+                <div class="insp-title" style="margin-bottom:6px">Will be recorded</div>
+                <div style="font-size:11px; color:var(--text-2); line-height:1.8">
+                  Units <b>mm</b><br>Schema <b>v1</b><br>Params <span class="mono">a41c92…7f0e</span><br>Generator <b>0.1 draft</b>
+                </div>
+              </div>
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="insp-title" style="margin-bottom:8px">Format</div>
+            <div class="fmt">
+              <div class="fmt-card is-on">
+                <div class="radio"></div>
+                <div class="fmt-name">STEP <span class="chip chip-neutral">.step</span></div>
+                <div class="fmt-desc">Solid CAD body — refine downstream in Fusion or other CAD.</div>
+              </div>
+              <div class="fmt-card">
+                <div class="radio"></div>
+                <div class="fmt-name">STL <span class="chip chip-neutral">.stl</span></div>
+                <div class="fmt-desc">Mesh only — print preview and diagnostics, not CAD refinement.</div>
+              </div>
+            </div>
+            <div style="display:flex; gap:7px; margin-top:10px; font-size:11px; color:var(--info); align-items:flex-start">
+              <svg class="ic" viewBox="0 0 24 24" style="width:13px;height:13px;margin-top:1px"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/></svg>
+              <div>Each format earns support through import evidence. First gate: this STEP measured correct inside Autodesk Fusion.</div>
+            </div>
+
+            <div class="fgrid" style="margin-top:12px">
+              <div class="field span2"><label>File name</label><div class="control"><span class="val mono">cm4-carrier-mount-a_v15.step</span></div></div>
+            </div>
+            <div class="cbrow">
+              <div class="cb"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></div>
+              <div>Write metadata sidecar (<span class="mono">.json</span>) — parameters, schema version, calibration provenance, warnings</div>
+            </div>
+          </div>
+          <div class="pop-foot">
+            <button class="btn btn-sm btn-ghost">Cancel</button>
+            <div class="spacer"></div>
+            <button class="btn btn-primary"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3v12M6 11l6 6 6-6"/><path d="M5 21h14"/></svg>Export STEP</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <div class="grp"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3v12M6 11l6 6 6-6"/><path d="M5 21h14"/></svg><span>Export</span></div>
+        <div class="spacer"></div>
+        <div class="grp"><span class="chip chip-measured"><svg class="ic" viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21l-4-4z"/><path d="M8 12l2 2M11 9l2 2M14 6l2 2"/></svg>Calibrated 32.0 px/mm</span></div>
+        <div class="grp"><span class="chip chip-generated"><svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-4.8L3 8v8l9 4.8L21 16z"/></svg>Generated</span></div>
+      </div>
+    </div>
+
+    <div class="inspector">
+      <div class="insp-scroll">
+        <div class="insp-sec">
+          <div class="insp-head"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3v12M6 11l6 6 6-6"/><path d="M5 21h14"/></svg><div class="insp-title">Export history</div></div>
+          <div style="font-size:11.5px;color:var(--text-3);line-height:1.55">No exports yet for this project. Every export is listed here with its parameters and file location.</div>
+        </div>
+        <div class="insp-sec">
+          <div class="insp-head"><svg class="ic" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9" r="1.6"/><circle cx="15" cy="15" r="1.6"/><path d="M9 15h3M15 9v3"/></svg><div class="insp-title">Reusable board definition</div></div>
+          <div style="font-size:11.5px;color:var(--text-2);line-height:1.55">Saving keeps <b>MG-DEV-01 rev B</b> — outline, holes, keep-outs, and provenance — reusable for other mount strategies later.</div>
+          <button class="btn btn-sm" style="margin-top:9px"><svg class="ic" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg>Save board to library</button>
+        </div>
+      </div>
+
+      <div class="vwrap">
+        <div class="vhead">
+          <div class="insp-title">Validation</div>
+          <div class="vcounts">
+            <span class="vcount vcount-ok"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg>Clear</span>
+            <span class="vcount vcount-info"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/></svg>1</span>
+          </div>
+        </div>
+        <div class="vlist">
+          <div class="vitem vitem-info">
+            <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/></svg>
+            <div class="vbody"><div class="vt">Physical fit is unverified</div><div class="vd">Export ≠ fit. Print and check against the real board before trusting the mount in service.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>

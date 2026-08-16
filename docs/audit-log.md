@@ -45,3 +45,96 @@ Disposition:
 - No tech debt recorded.
 - No captured INBOX items recorded.
 
+## 2026-08-16 - UI mockup direction pass
+
+Scope: static Board Mount Designer UI mockups (`docs/design/UI_MOCKUPS.md`, `docs/design/mockups/`), UX Vision pointer, NEXT evidence update, HISTORY entry, regenerated map.
+
+Branch/commit: `claude/app-ui-mockups-kvevmh`; base `main` was `84e343a848c374abf08bfe1b6a4792a37f4a2b03`.
+
+Commands:
+
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- New doc carries required frontmatter; image and related links resolve.
+- Mockups are labeled Direction and rendered from hand-authored HTML sources committed beside the PNGs; they are not product screenshots.
+- Every required early state from UX Vision is represented in the set.
+- Mockup content respects the "what a mock must not promise" list: no auto-detection, no trusted dimensions without calibration, no ratified formats/kernel, no cloud/AI requirement, no physical-fit claim, style not locked.
+- No product code added; `src/` still does not exist.
+
+Findings:
+
+- ERROR: none.
+- WARN: geometry kernel, export formats, project schema, image/privacy boundary, and repository license remain Proposed, as before.
+- INFO: mockups introduce fictional sample-board imagery (MG-DEV-01) drawn for this repository; Inter (SIL OFL) is used at render time but not vendored.
+
+Disposition:
+
+- First UX/workflow spike remains open in NEXT with the interactive flow and usability notes outstanding.
+- No tech debt recorded.
+- No captured INBOX items recorded.
+
+## 2026-08-16 - Component spec and dark mode pass
+
+Scope: `docs/design/COMPONENT_SPEC.md`, dark theme tokens in the mockup design system, three dark reference renders, UI_MOCKUPS/NEXT/HISTORY updates, regenerated map.
+
+Branch/commit: `claude/app-ui-mockups-kvevmh`; follows the UI mockup direction pass on the same branch.
+
+Commands:
+
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- Spec tokens and metrics are extracted from `mockups/src/mockup.css`, which now implements both themes and is named the source of truth on divergence.
+- Dark theme is a token swap (`:root[data-theme="dark"]`) plus enumerated component overrides; the editing canvas, status bar, and canvas-floating elements are documented as theme-invariant.
+- Dark renders committed for the library, editor, and dialog-sheet screens; `render.sh` reproduces them.
+- Spec repeats no authority it does not have: kernel, export formats, schema, privacy boundary, license, responsive breakpoints, and final style ratification remain explicitly open.
+
+Findings:
+
+- ERROR: none.
+- WARN: none new; open Proposed decisions unchanged.
+- INFO: contrast pairs are asserted from the palette and should be re-verified with a contrast checker during the Phase 1 skeleton.
+
+Disposition:
+
+- Component extraction into shared packages stays deferred per ADR 0003 until a real second consumer exists.
+- No tech debt recorded.
+- No captured INBOX items recorded.
+
+## 2026-08-16 - UI direction owner approval
+
+Scope: ADR 0011 (accepted), status updates in UI_MOCKUPS/COMPONENT_SPEC/NEXT, decision-log index, `.gitignore` for Python bytecode, regenerated map.
+
+Branch/commit: `claude/app-ui-mockups-kvevmh`; follows the component spec and dark mode pass.
+
+Commands:
+
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- ADR 0011 records the owner's explicit 2026-08-16 instruction as its acceptance authority and scopes approval to the guiding UI direction.
+- Approval does not touch open ADRs (0004–0009), does not mark anything Built or Verified, and keeps the direction refinable through review rather than frozen.
+- All twelve reference PNGs are committed in `docs/design/mockups/` and embedded in UI_MOCKUPS.md; the spec, mockups, and ADR cross-link.
+
+Findings:
+
+- ERROR: none.
+- WARN: none new.
+- INFO: none.
+
+Disposition:
+
+- The UX spike proceeds against an owner-approved target; deviations found there feed back through review per ADR 0011.
+- No tech debt recorded.
+- No captured INBOX items recorded.
+

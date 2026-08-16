@@ -1,0 +1,198 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>09 — Required early states</title>
+<link rel="stylesheet" href="mockup.css">
+<script>if (new URLSearchParams(location.search).get("theme") === "dark") document.documentElement.dataset.theme = "dark";</script>
+<style>
+  body { background: var(--bg); }
+  .sheet { width: 1440px; height: 900px; padding: 30px 44px; display: flex; flex-direction: column; }
+  .shead { display: flex; align-items: flex-end; gap: 16px; margin-bottom: 20px; }
+  .shead h1 { font-size: 18px; font-weight: 700; letter-spacing: -0.015em; }
+  .shead .sub { font-size: 12px; color: var(--text-3); margin-top: 4px; }
+  .legend { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+  .legend .lt { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-3); margin-right: 2px; }
+  .grid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr 1fr; gap: 22px 22px; }
+  .cell { display: flex; flex-direction: column; min-height: 0; }
+  .clabel { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-3); margin-bottom: 8px; display: flex; gap: 8px; align-items: center; }
+  .clabel .cnum { width: 17px; height: 17px; border-radius: 50%; background: var(--text-2); color: var(--panel); font-size: 10px; display: flex; align-items: center; justify-content: center; letter-spacing: 0; }
+  .card { flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-2); overflow: hidden; display: flex; flex-direction: column; }
+  .chead { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
+  .chead .hic { width: 26px; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex: none; }
+  .hic-warn { background: var(--warn-bg); color: var(--warn); border: 1px solid var(--warn-border); }
+  .hic-err { background: var(--err-bg); color: var(--err); border: 1px solid var(--err-border); }
+  .hic-ok { background: var(--ok-bg); color: var(--ok); border: 1px solid var(--ok-border); }
+  .hic-run { background: var(--accent-soft); color: var(--accent); border: 1px solid var(--accent-border); }
+  .hic-inf { background: var(--inferred-bg); color: var(--inferred); border: 1px solid var(--inferred-border); }
+  .chead .t { font-size: 13px; font-weight: 650; flex: 1; }
+  .cbody { padding: 12px 14px; flex: 1; font-size: 12px; color: var(--text-2); line-height: 1.55; }
+  .cfoot { padding: 10px 14px; border-top: 1px solid var(--border); background: var(--panel-2); display: flex; gap: 8px; align-items: center; }
+  .cfoot .spacer { flex: 1; }
+  .filebox { display: flex; align-items: center; gap: 8px; background: var(--panel-2); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; margin: 8px 0; }
+  .filebox .ic { color: var(--text-3); }
+  .errbox { background: #131720; color: #ffb4a8; border-radius: 8px; padding: 9px 11px; font-family: var(--mono); font-size: 10.5px; line-height: 1.6; margin: 8px 0; }
+  .blocker { display: flex; align-items: flex-start; gap: 8px; padding: 7px 9px; border-radius: 8px; background: var(--err-bg); margin-bottom: 6px; }
+  .blocker .ic { width: 12px; height: 12px; color: var(--err); margin-top: 2px; }
+  .blocker .bt { font-size: 11.5px; font-weight: 650; color: var(--err); }
+  .blocker .bd { font-size: 10.5px; color: var(--text-2); }
+  .blocker .vfix { font-size: 10.5px; font-weight: 650; color: var(--accent); margin-left: auto; white-space: nowrap; }
+  .meta-grid { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-size: 11px; margin-top: 8px; }
+  .meta-grid dt { color: var(--text-3); }
+  .meta-grid dd { color: var(--text); font-weight: 600; }
+  .spin { width: 30px; height: 30px; }
+</style></head>
+<body>
+<div class="sheet">
+  <div class="shead">
+    <div>
+      <h1>Board Mount Designer — required early states</h1>
+      <div class="sub">Blocked, busy, failed, and complete moments the first UX spike must cover. Companion to the full-screen mockups.</div>
+    </div>
+    <div class="legend">
+      <span class="lt">State vocabulary</span>
+      <span class="chip chip-uncal">Uncalibrated</span>
+      <span class="chip chip-inferred">Inferred</span>
+      <span class="chip chip-measured">Measured</span>
+      <span class="chip chip-confirmed">Confirmed</span>
+      <span class="chip chip-generated">Generated</span>
+      <span class="chip chip-neutral">Exported</span>
+    </div>
+  </div>
+
+  <div class="grid">
+
+    <div class="cell">
+      <div class="clabel"><span class="cnum">1</span>Reopened project · missing image</div>
+      <div class="card">
+        <div class="chead">
+          <div class="hic hic-warn"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 16l5-4 4 3 4-4 5 4"/><line x1="4" y1="4" x2="20" y2="20"/></svg></div>
+          <div class="t">Reference image is missing</div>
+        </div>
+        <div class="cbody">
+          The saved reference can't be found at its last location.
+          <div class="filebox"><svg class="ic" viewBox="0 0 24 24"><rect x="3" y="5" width="18" height="14" rx="2"/><circle cx="9" cy="10" r="1.8"/><path d="M3 16l5-4 4 3 4-4 5 4"/></svg><span class="mono">refs/mg-dev-01_top.jpg</span><span class="chip chip-missing" style="margin-left:auto">Not found</span></div>
+          Your board definition is intact — outline, holes, keep-outs, and calibration are stored in the project, not in the image.
+        </div>
+        <div class="cfoot">
+          <button class="btn btn-sm btn-primary">Locate image…</button>
+          <button class="btn btn-sm btn-ghost">Continue without it</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="clabel"><span class="cnum">2</span>Export blocked</div>
+      <div class="card">
+        <div class="chead">
+          <div class="hic hic-err"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3v12M6 11l6 6 6-6"/><path d="M5 21h14"/></svg></div>
+          <div class="t">Export isn't ready</div>
+          <span class="chip chip-missing">2 blockers</span>
+        </div>
+        <div class="cbody">
+          Export writes only trustworthy geometry. Two inputs are still missing:
+          <div style="margin-top:9px">
+            <div class="blocker"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/></svg><div><div class="bt">Reference is uncalibrated</div><div class="bd">Pixels have no physical scale yet.</div></div><span class="vfix">Calibrate</span></div>
+            <div class="blocker"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/></svg><div><div class="bt">H3 has no diameter</div><div class="bd">Standoff and screw can't be sized.</div></div><span class="vfix">Enter ⌀</span></div>
+          </div>
+        </div>
+        <div class="cfoot">
+          <span style="font-size:11px;color:var(--text-3)">Nothing is exported with guessed values.</span>
+          <div class="spacer"></div>
+          <button class="btn btn-sm btn-primary is-disabled">Export</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="clabel"><span class="cnum">3</span>Export in progress</div>
+      <div class="card">
+        <div class="chead">
+          <div class="hic hic-run"><svg class="spin ic" viewBox="0 0 24 24" style="width:15px;height:15px"><path d="M12 3a9 9 0 1 1-8.6 6.3" stroke-width="2.4"/></svg></div>
+          <div class="t">Generating STEP…</div>
+          <span class="chip chip-neutral num">64%</span>
+        </div>
+        <div class="cbody">
+          <div class="progress" style="margin:6px 0 10px"><div style="width:64%"></div></div>
+          <div style="font-size:11px;color:var(--text-3)" class="mono">boolean: standoff 4 / 6 · 2.1 s elapsed</div>
+          <div style="margin-top:10px">Long generations show progress and stay cancellable. Cancelling keeps the last good result and changes nothing on disk.</div>
+        </div>
+        <div class="cfoot">
+          <div class="spacer"></div>
+          <button class="btn btn-sm">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="clabel"><span class="cnum">4</span>Export failed</div>
+      <div class="card">
+        <div class="chead">
+          <div class="hic hic-err"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M15 9l-6 6M9 9l6 6"/></svg></div>
+          <div class="t">STEP export failed</div>
+        </div>
+        <div class="cbody">
+          The generated solid failed a validity check, so no file was written.
+          <div class="errbox">GEOM_BOOLEAN_NON_MANIFOLD<br>standoff S2 ∩ base plate · seam 0.002 mm</div>
+          The canonical model is unchanged. This is diagnosable — the report names the failing feature and parameters instead of inventing geometry.
+        </div>
+        <div class="cfoot">
+          <button class="btn btn-sm btn-ghost">Copy report</button>
+          <div class="spacer"></div>
+          <button class="btn btn-sm">Open log</button>
+          <button class="btn btn-sm btn-primary">Retry</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="clabel"><span class="cnum">5</span>Export complete</div>
+      <div class="card">
+        <div class="chead">
+          <div class="hic hic-ok"><svg class="ic" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></div>
+          <div class="t">Export complete</div>
+          <span class="chip chip-neutral">Exported</span>
+        </div>
+        <div class="cbody">
+          <div class="filebox"><svg class="ic" viewBox="0 0 24 24"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h9l5 5v11a2 2 0 0 1-2 2z"/><path d="M14 3v5h5"/></svg><span class="mono">cm4-carrier-mount-a_v15.step</span><span style="margin-left:auto;font-size:11px;color:var(--text-3)">412 KB</span></div>
+          <dl class="meta-grid">
+            <dt>Units</dt><dd>mm</dd>
+            <dt>Schema</dt><dd>v1 · params <span class="mono">a41c92…7f0e</span></dd>
+            <dt>Sidecar</dt><dd class="mono" style="font-weight:500">…_v15.meta.json</dd>
+          </dl>
+          <div style="display:flex;gap:7px;margin-top:10px;align-items:center"><span class="chip chip-uncal">Not physically verified</span><span style="font-size:10.5px;color:var(--text-3)">print + fit check is the real proof</span></div>
+        </div>
+        <div class="cfoot">
+          <button class="btn btn-sm btn-ghost">Export STL too</button>
+          <div class="spacer"></div>
+          <button class="btn btn-sm btn-primary">Show in folder</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="cell">
+      <div class="clabel"><span class="cnum">6</span>Reviewing an inferred value</div>
+      <div class="card">
+        <div class="chead">
+          <div class="hic hic-inf"><svg class="ic" viewBox="0 0 24 24"><path d="M5 13c2-3.6 4-3.6 6 0s4 3.6 6 0" stroke-width="2"/></svg></div>
+          <div class="t">H4 position is inferred</div>
+          <span class="chip chip-inferred">≈ Inferred</span>
+        </div>
+        <div class="cbody">
+          Suggested by mirroring the H1–H3 hole pattern — not measured from the board.
+          <dl class="meta-grid" style="margin-top:6px">
+            <dt>Suggested center</dt><dd class="num">(81.50, 52.50) mm</dd>
+            <dt>Vs. photo click</dt><dd class="num">Δ 0.28 mm</dd>
+            <dt>Source</dt><dd>Pattern symmetry</dd>
+          </dl>
+          <div style="margin-top:10px">Confirming marks it user-reviewed — it stays editable. Typing a caliper value upgrades it to Measured.</div>
+        </div>
+        <div class="cfoot">
+          <button class="btn btn-sm btn-ghost">Adjust…</button>
+          <div class="spacer"></div>
+          <button class="btn btn-sm">Type measured value</button>
+          <button class="btn btn-sm btn-primary">Confirm</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+</body></html>

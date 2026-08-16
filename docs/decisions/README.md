@@ -19,6 +19,7 @@ ADRs record non-obvious project decisions. Accepted ADRs govern until superseded
 - [ADR 0002 - Load-bearing documentation and audit](0002-load-bearing-documentation-and-audit.md)
 - [ADR 0003 - Local-first product posture](0003-local-first-product-posture.md)
 - [ADR 0010 - Board Mount Designer MVP target](0010-board-mount-designer-mvp-target.md)
+- [ADR 0011 - Board Mount Designer UI direction](0011-board-mount-designer-ui-direction.md)
 
 ## Proposed
 

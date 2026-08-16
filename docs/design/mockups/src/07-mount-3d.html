@@ -1,0 +1,174 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>07 — Mount strategy and synchronized preview</title>
+<link rel="stylesheet" href="mockup.css">
+<script>if (new URLSearchParams(location.search).get("theme") === "dark") document.documentElement.dataset.theme = "dark";</script>
+<style>
+  .split { position: absolute; inset: 0; display: flex; }
+  .pane2d { width: 348px; flex: none; border-right: 1px solid #262e3a; position: relative; background: var(--canvas); }
+  .pane3d { flex: 1; position: relative; background: var(--canvas-2);
+    background-image: radial-gradient(ellipse 60% 45% at 50% 56%, rgba(64, 105, 148, 0.16), transparent 70%); }
+  .pane-tag {
+    position: absolute; top: 10px; left: 12px; z-index: 15; display: inline-flex; align-items: center; gap: 6px;
+    font-size: 10.5px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: #7f8da1;
+  }
+  .pane-tag .ic { width: 12px; height: 12px; }
+  .mini { position: absolute; left: 4px; top: 118px; width: 340px; }
+  .mini img { width: 340px; height: 224.4px; border-radius: 5px; }
+  .mini svg.overlay { position: absolute; left: 0; top: 0; width: 340px; height: 224.4px; overflow: visible; }
+  .iso { position: absolute; left: 50%; top: 52%; transform: translate(-50%, -50%); width: 660px; }
+  .viewseg {
+    position: absolute; top: 10px; right: 12px; z-index: 15; display: flex; gap: 2px; padding: 3px;
+    background: rgba(24, 30, 39, 0.92); border: 1px solid #2c3542; border-radius: 9px; color: #97a4b5;
+  }
+  .viewseg > div { padding: 4px 10px; font-size: 11px; font-weight: 650; border-radius: 6px; }
+  .viewseg > div.is-on { background: var(--accent); color: #fff; }
+</style></head>
+<body>
+<div class="frame">
+
+  <div class="topbar">
+    <div class="logo"><svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-4.8L3 8v8l9 4.8L21 16z"/><path d="M3 8l9 4.6L21 8"/><path d="M12 12.6V20.8"/></svg></div>
+    <div class="appname">Model Generator</div>
+    <div class="crumb"><span class="sep">/</span><a>Library</a><span class="sep">/</span><span class="here">cm4-carrier-mount-a</span><span class="chip chip-neutral" style="margin-left:6px">Board Mount Designer</span></div>
+    <div class="spacer"></div>
+    <div class="savestate"><span class="dot"></span>Autosaved 13:26</div>
+    <div class="vdiv"></div>
+    <button class="iconbtn"><svg class="ic" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 7"/></svg></button>
+    <button class="iconbtn"><svg class="ic" viewBox="0 0 24 24"><path d="M21 7v6h-6"/><path d="M21 13a9 9 0 1 1-3-7.7L21 7"/></svg></button>
+    <div class="vdiv"></div>
+    <div class="badge">mm</div>
+    <button class="btn btn-sm btn-primary"><svg class="ic" viewBox="0 0 24 24"><path d="M12 3v12M6 11l6 6 6-6"/><path d="M5 21h14"/></svg>Export</button>
+  </div>
+
+  <div class="main">
+    <div class="rail">
+      <div class="rail-title">Workflow</div>
+      <div class="steps">
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Reference</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Calibrate</span><span class="meta">32.0 px/mm</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Outline</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Holes</span><span class="meta">4 · ✓</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Keep-outs</span><span class="meta">3</span></div>
+        <div class="step is-done"><span class="n"><svg class="ic ic-sm" viewBox="0 0 24 24"><path d="M20 6L9 17l-4-4"/></svg></span><span class="lbl">Measurements</span></div>
+        <div class="step is-current"><span class="n">7</span><span class="lbl">Mount</span><span class="flag flag-warn"><svg class="ic" viewBox="0 0 24 24"><path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.8 3h15.6a2 2 0 0 0 1.8-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v5"/></svg></span></div>
+        <div class="step"><span class="n">8</span><span class="lbl">Preview &amp; export</span></div>
+      </div>
+      <div class="rail-foot">
+        <button class="btn btn-ghost btn-sm" style="justify-content:flex-start"><svg class="ic" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>Back to Library</button>
+        <div class="rail-note">2D and 3D show the same canonical model. Edits regenerate the bracket deterministically.</div>
+      </div>
+    </div>
+
+    <div class="canvas-wrap">
+      <div class="canvas" style="background:none">
+        <div class="split">
+          <div class="pane2d">
+            <div class="pane-tag"><svg class="ic" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/></svg>2D reference</div>
+            <div class="mini">
+              <img src="board-photo.svg" alt="">
+              <svg class="overlay" viewBox="0 0 1000 660">
+                <rect x="75" y="50" width="850" height="560" rx="26" fill="none" stroke="#20d3e8" stroke-width="4" opacity="0.8"/>
+                <g stroke="#3ddc97" fill="none" stroke-width="4" opacity="0.8">
+                  <circle cx="110" cy="85" r="30"/><circle cx="890" cy="85" r="30"/><circle cx="110" cy="575" r="30"/>
+                </g>
+                <circle cx="890" cy="575" r="34" fill="none" stroke="#8b93f8" stroke-width="7"/>
+                <g fill="rgba(244,105,96,0.16)" stroke="#f4695f" stroke-width="3.5" stroke-dasharray="10 7">
+                  <rect x="798" y="234" width="180" height="192" rx="10"/>
+                  <circle cx="700" cy="490" r="58"/>
+                  <rect x="620" y="520" width="300" height="80"/>
+                </g>
+              </svg>
+            </div>
+            <div class="cv-pill" style="left: 12px; bottom: 44px;"><svg class="ic" viewBox="0 0 24 24"><path d="M3 3l7.5 18 2.4-7.8L21 10.7z"/></svg>Selected: <b>S4 / H4</b></div>
+            <div class="cv-pill" style="left: 12px; bottom: 12px;"><svg class="ic" viewBox="0 0 24 24"><path d="M4 12h16M4 12l3-3M4 12l3 3M20 12l-3-3M20 12l-3 3"/></svg>Selection synced both ways</div>
+          </div>
+
+          <div class="pane3d">
+            <div class="pane-tag"><svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-4.8L3 8v8l9 4.8L21 16z"/><path d="M3 8l9 4.6L21 8"/><path d="M12 12.6V20.8"/></svg>3D preview · derived from canonical model</div>
+            <div class="viewseg"><div class="is-on">Iso</div><div>Top</div><div>Front</div><div>Fit</div></div>
+
+            <img class="iso" src="bracket-iso.svg" alt="">
+
+            <div class="cv-pill" style="right: 14px; top: 118px;"><b>Bracket</b>·plate + standoffs · 91 × 62 × 9 mm</div>
+            <div class="cv-pill" style="right: 14px; top: 152px;">4 standoffs · M3 heat-set · ⌀7.0 × 6.0</div>
+            <div class="cv-pill" style="left: 16px; bottom: 92px; background:#332809cc; border-color:#8f6d24; color:#f5d78e;"><svg class="ic" viewBox="0 0 24 24"><path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.8 3h15.6a2 2 0 0 0 1.8-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v5"/></svg>S4 seat clipped by KO-3 — 1.2 mm wall margin</div>
+            <div class="cv-pill" style="left: 16px; bottom: 58px;"><span class="chip chip-generated" style="font-size:10px"><svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-4.8L3 8v8l9 4.8L21 16z"/></svg>Generated</span>13:26 · 0.6 s · deterministic</div>
+            <div style="position:absolute; left: 16px; bottom: 16px; display:flex; gap:8px; z-index:16">
+              <button class="btn btn-sm" style="background:#232c39;border-color:#39455a;color:#e6ecf4;box-shadow:none"><svg class="ic" viewBox="0 0 24 24"><path d="M3 7v6h6"/><path d="M3 13a9 9 0 1 0 3-7.7L3 7"/></svg>Regenerate</button>
+              <button class="btn btn-sm btn-ghost" style="color:#97a4b5">Auto: on</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="statusbar">
+        <div class="grp"><svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-4.8L3 8v8l9 4.8L21 16z"/></svg><span>Preview</span></div>
+        <div class="sdiv"></div>
+        <div class="grp"><span>Bodies</span><span class="val">1</span><span>· Triangles</span><span class="val">18.4 k (preview only)</span></div>
+        <div class="spacer"></div>
+        <div class="grp"><span class="chip chip-measured"><svg class="ic" viewBox="0 0 24 24"><path d="M3 17L17 3l4 4L7 21l-4-4z"/><path d="M8 12l2 2M11 9l2 2M14 6l2 2"/></svg>Calibrated 32.0 px/mm</span></div>
+        <div class="grp"><span class="chip chip-generated"><svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-4.8L3 8v8l9 4.8L21 16z"/></svg>Generated</span></div>
+        <div class="sdiv"></div>
+        <div class="grp"><span>Grid</span><span class="val">10 mm</span></div>
+      </div>
+    </div>
+
+    <div class="inspector">
+      <div class="insp-scroll">
+        <div class="insp-sec">
+          <div class="insp-head"><svg class="ic" viewBox="0 0 24 24"><path d="M12 4l8 5v6l-8 5-8-5V9z"/></svg><div class="insp-title">Mount strategy</div></div>
+          <div class="fgrid">
+            <div class="field span2"><label>Strategy</label><div class="control is-select"><span class="val">Plate + standoffs</span><svg class="ic" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div></div>
+            <div class="field"><label>Standoff height</label><div class="control"><span class="val num">6.00</span><span class="unit">mm</span></div></div>
+            <div class="field"><label>Base thickness</label><div class="control"><span class="val num">3.00</span><span class="unit">mm</span></div></div>
+            <div class="field span2"><label>Fastener</label><div class="control is-select"><span class="val">M3 heat-set insert</span><svg class="ic" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div></div>
+            <div class="field"><label>Boss ⌀</label><div class="control"><span class="val num">7.00</span><span class="unit">mm</span></div></div>
+            <div class="field"><label>Side tabs</label><div class="seg"><div>0</div><div class="is-on">2</div><div>4</div></div></div>
+            <div class="field"><label>Clearance</label><div class="control"><span class="val num">0.30</span><span class="unit">mm</span></div></div>
+            <div class="field"><label>Tolerance</label><div class="control is-select"><span class="val">FDM ± 0.20</span><svg class="ic" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></div></div>
+          </div>
+          <div class="fhelp" style="margin-top:8px">Clearances and tolerances are explicit parameters — never hidden constants.</div>
+        </div>
+
+        <div class="insp-sec">
+          <div class="insp-head"><svg class="ic" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><circle cx="9" cy="9" r="1.6"/><circle cx="15" cy="15" r="1.6"/><path d="M9 15h3M15 9v3"/></svg><div class="insp-title">Board facts in use</div></div>
+          <div style="display:flex;flex-direction:column;gap:6px;font-size:11.5px;color:var(--text-2)">
+            <div style="display:flex;justify-content:space-between;align-items:center"><span>Outline 85.00 × 56.00</span><span class="chip chip-confirmed">Confirmed</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:center"><span>Thickness 1.60 mm</span><span class="chip chip-measured">Measured</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:center"><span>4 holes ⌀3.20</span><span class="chip chip-confirmed">Confirmed</span></div>
+            <div style="display:flex;justify-content:space-between;align-items:center"><span>3 keep-outs</span><span class="chip chip-measured">Measured</span></div>
+          </div>
+        </div>
+
+        <div class="insp-sec">
+          <div class="insp-head"><svg class="ic" viewBox="0 0 24 24"><path d="M21 8l-9-4.8L3 8v8l9 4.8L21 16z"/><path d="M3 8l9 4.6L21 8"/><path d="M12 12.6V20.8"/></svg><div class="insp-title">Generation</div><span class="chip chip-generated">Up to date</span></div>
+          <div style="font-size:11px;color:var(--text-3)">Params <span class="mono">a41c92…7f0e</span> · project v14 · 13:26 · 0.6 s</div>
+          <div class="fhelp" style="margin-top:6px">Preview and export consume this same generated result.</div>
+        </div>
+      </div>
+
+      <div class="vwrap">
+        <div class="vhead">
+          <div class="insp-title">Validation</div>
+          <div class="vcounts">
+            <span class="vcount vcount-err"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><circle cx="12" cy="16.6" r="0.8" fill="currentColor"/></svg>0</span>
+            <span class="vcount vcount-warn"><svg class="ic" viewBox="0 0 24 24"><path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.8 3h15.6a2 2 0 0 0 1.8-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v5"/></svg>1</span>
+            <span class="vcount vcount-info"><svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/></svg>1</span>
+          </div>
+        </div>
+        <div class="vlist">
+          <div class="vitem vitem-warn">
+            <svg class="ic" viewBox="0 0 24 24"><path d="M10.3 3.9L2.4 18a2 2 0 0 0 1.8 3h15.6a2 2 0 0 0 1.8-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v5"/><circle cx="12" cy="17.4" r="0.8" fill="currentColor"/></svg>
+            <div class="vbody"><div class="vt">S4 standoff seat is reduced</div><div class="vd">KO-3 clips the seat to a 1.2 mm wall margin. Printable, but consider moving the wire channel 2 mm outward.</div></div>
+            <div class="vfix">Review</div>
+          </div>
+          <div class="vitem vitem-info">
+            <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5"/><circle cx="12" cy="8" r="0.6" fill="currentColor"/></svg>
+            <div class="vbody"><div class="vt">Preview is not physical proof</div><div class="vd">Fit claims need a printed part. Export records what was generated, from which parameters.</div></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body></html>
