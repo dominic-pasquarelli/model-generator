@@ -16,7 +16,7 @@ related:
 
 ## Status
 
-These mockups are **Direction**. They are hand-authored static HTML pages rendered to PNG — not screenshots of a running product, not a locked visual style, and not evidence that any feature is Built or Verified. They exist to give implementation a shared visual target for layout, workflow order, state vocabulary, and honesty rules from [UX Vision](../UX_VISION.md).
+These mockups are the **owner-approved guiding UI direction** for Board Mount Designer implementation, ratified by [ADR 0011](../decisions/0011-board-mount-designer-ui-direction.md) (2026-08-16). They are hand-authored static HTML pages rendered to PNG — not screenshots of a running product, and not evidence that any feature is Built or Verified. They give implementation its shared visual target for layout, workflow order, state vocabulary, and honesty rules from [UX Vision](../UX_VISION.md); material departures during implementation should be deliberate and recorded per ADR 0011.
 
 The board in the images, **MG-DEV-01**, is a fictional sample board drawn for these mockups. All dimensions, timestamps, and file names shown are illustrative.
 
@@ -104,7 +104,7 @@ Per UX Vision, nothing in these images implies that:
 - a geometry kernel is selected — the 3D bracket is an illustration, not kernel output;
 - cloud sync or AI assistance is required — the shell is explicitly local-first with no account;
 - physical fit has been validated — export screens carry a "not physically verified" state;
-- the visual style is locked — this is one candidate direction for the Phase 1 skeleton to react to.
+- the visual style is frozen pixel-for-pixel — it is the owner-approved guiding direction (ADR 0011), refined through normal review, not an immutable identity.
 
 ## Regenerating
 

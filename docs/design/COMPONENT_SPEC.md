@@ -17,7 +17,7 @@ related:
 
 This is the implementable companion to the [UI mockups](UI_MOCKUPS.md): the complete modular component inventory, design tokens (light **and dark**), layout metrics, canvas mark specifications, interaction contracts, and accessibility rules needed to reproduce those screens exactly.
 
-It is **Direction**, like the mockups: a shared target for the Phase 1 skeleton and the UX spike, not a ratified visual standard. Where this spec and a rendered PNG disagree, the mockup sources in [`mockups/src/`](mockups/src/) are the source of truth — every token and metric below is extracted from [`mockups/src/mockup.css`](mockups/src/mockup.css), which doubles as a working reference implementation of the whole system, including the dark theme.
+Together with the mockups, this spec is the **owner-approved guiding UI reference** for implementation ([ADR 0011](../decisions/0011-board-mount-designer-ui-direction.md), 2026-08-16); it remains a living document refined through normal review. Where this spec and a rendered PNG disagree, the mockup sources in [`mockups/src/`](mockups/src/) are the source of truth — every token and metric below is extracted from [`mockups/src/mockup.css`](mockups/src/mockup.css), which doubles as a working reference implementation of the whole system, including the dark theme.
 
 Implementation posture follows [ADR 0003](../decisions/0003-local-first-product-posture.md): React + Vite + TypeScript, Tailwind-compatible styling, Radix/shadcn-compatible component patterns, lucide-style icons. Suggested code mapping is in the last sections.
 
@@ -321,4 +321,4 @@ An implementation matches the mockups when:
 
 ## What This Spec Does Not Decide
 
-Geometry kernel, export formats, project schema, image/privacy boundary, and license remain owned by their ADRs. Real preview rendering (the 3D palette above is illustrative), responsive breakpoints, camera capture UI, and the final component library extraction (shared with Cadence/Axon only after a real second consumer exists — ADR 0003) are open. Visual style remains unlocked until the owner ratifies a direction after the Phase 1 skeleton exists.
+Geometry kernel, export formats, project schema, image/privacy boundary, and license remain owned by their ADRs. Real preview rendering (the 3D palette above is illustrative), responsive breakpoints, camera capture UI, and the final component library extraction (shared with Cadence/Axon only after a real second consumer exists — ADR 0003) are open. The UI direction itself is owner-approved via [ADR 0011](../decisions/0011-board-mount-designer-ui-direction.md); it guides implementation and continues to be refined through review rather than being frozen pixel-for-pixel.

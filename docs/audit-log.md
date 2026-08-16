@@ -108,3 +108,33 @@ Disposition:
 - No tech debt recorded.
 - No captured INBOX items recorded.
 
+## 2026-08-16 - UI direction owner approval
+
+Scope: ADR 0011 (accepted), status updates in UI_MOCKUPS/COMPONENT_SPEC/NEXT, decision-log index, `.gitignore` for Python bytecode, regenerated map.
+
+Branch/commit: `claude/app-ui-mockups-kvevmh`; follows the component spec and dark mode pass.
+
+Commands:
+
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- ADR 0011 records the owner's explicit 2026-08-16 instruction as its acceptance authority and scopes approval to the guiding UI direction.
+- Approval does not touch open ADRs (0004–0009), does not mark anything Built or Verified, and keeps the direction refinable through review rather than frozen.
+- All twelve reference PNGs are committed in `docs/design/mockups/` and embedded in UI_MOCKUPS.md; the spec, mockups, and ADR cross-link.
+
+Findings:
+
+- ERROR: none.
+- WARN: none new.
+- INFO: none.
+
+Disposition:
+
+- The UX spike proceeds against an owner-approved target; deviations found there feed back through review per ADR 0011.
+- No tech debt recorded.
+- No captured INBOX items recorded.
+
