@@ -133,8 +133,8 @@ def docs_for_map(root: Path) -> list[tuple[str, dict[str, object]]]:
     return docs
 
 
-def generate_map(root: Path) -> str:
-    today = _dt.date.today().isoformat()
+def generate_map(root: Path, updated: str | None = None) -> str:
+    map_updated = updated or _dt.date.today().isoformat()
     grouped: dict[str, list[tuple[str, dict[str, object]]]] = {}
     for path, meta in docs_for_map(root):
         grouped.setdefault(str(meta.get("tier", "meta")), []).append((path, meta))
@@ -144,7 +144,7 @@ def generate_map(root: Path) -> str:
         "title: Documentation Map",
         "tier: meta",
         "status: generated",
-        f"updated: {today}",
+        f"updated: {map_updated}",
         "related:",
         "  - docs/DOC_SPEC.md",
         "---",
@@ -291,9 +291,11 @@ def audit(root: Path, required_paths: Iterable[str] = REQUIRED_PATHS) -> list[Fi
                 findings.append(Finding("ERROR", "docs/INBOX.md", f"{match.group(1)} deferred without recall hook"))
 
     map_path = root / "docs/MAP.md"
-    expected = generate_map(root)
     if map_path.exists():
         actual = map_path.read_text(encoding="utf-8")
+        actual_meta, _ = parse_frontmatter(actual)
+        current_updated = actual_meta.get("updated")
+        expected = generate_map(root, str(current_updated) if is_date(current_updated) else None)
         if actual != expected:
             findings.append(Finding("ERROR", "docs/MAP.md", "generated map is out of date"))
 

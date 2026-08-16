@@ -138,3 +138,37 @@ Disposition:
 - No tech debt recorded.
 - No captured INBOX items recorded.
 
+## 2026-08-16 - Local setup and Phase 0 hardening
+
+Scope: merged UI direction PR, local Windows setup friction, doc-audit generated-map determinism, mockup render portability, Proposed ADR spike scopes, NEXT/HISTORY closeout.
+
+Branch/commit: local `main` after GitHub squash merge `45d5a73eff77427280615b7d6becc6ba632efd38`; follow-up changes pending commit at audit time.
+
+Commands:
+
+- `python tools/doc-audit/doc_audit.py --write-map`
+- `python tools/doc-audit/doc_audit.py --check`
+- `python -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- PR #4 was merged on GitHub, bringing ADR 0011, UI_MOCKUPS, COMPONENT_SPEC, mockup PNGs, source HTML/SVG/CSS, and `.gitignore` into `main`.
+- `doc_audit.generate_map` now preserves the existing `docs/MAP.md` `updated` date during checks while `--write-map` still stamps a fresh date.
+- The doc-audit test suite has a regression test proving date-only map drift does not trigger `generated map is out of date`.
+- Windows command notes now document `python` as the fallback when `python3` is unavailable.
+- Mockup rendering now accepts `PYTHON_BIN` so Windows/Git Bash users can point the crop step at `python`.
+- ADRs 0004-0008 contain concrete Phase 0 spike scopes without changing their Proposed status.
+- Local repo config was set to use `.git/info/exclude`, eliminating the inaccessible user-level ignore-file warning for this checkout.
+
+Findings:
+
+- ERROR: none after audit.
+- WARN: geometry kernel, export format support, final project file format, image/privacy boundary, repository license, modular attachment scope, and physical-validation fixture remain open owner/evidence decisions.
+- INFO: product code still does not exist; all new implementation guidance is Proposed spike scope or accepted UI direction.
+
+Disposition:
+
+- NEXT now points to running the geometry/export spike against the semantic fixture and recording STEP/Fusion evidence.
+- No tech debt recorded.
+- No captured INBOX items recorded.
+

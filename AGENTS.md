@@ -42,6 +42,8 @@ python3 tools/doc-audit/doc_audit.py --check
 python3 -m unittest discover tools/doc-audit/tests
 ```
 
+On Windows, use `python` for the same commands if `python3` resolves to the WindowsApps shim or is otherwise unavailable.
+
 Do not invent product build, preview, export, or app-start commands until product code exists.
 
 ## Closeout Rule

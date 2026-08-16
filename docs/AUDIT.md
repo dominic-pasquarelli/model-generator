@@ -20,6 +20,8 @@ Run:
 python3 tools/doc-audit/doc_audit.py --check
 ```
 
+On Windows, use `python` in place of `python3` if the `python3` launcher is unavailable.
+
 The checker validates required documents, frontmatter, link targets, ADR numbering, ADR index coverage, TECH_DEBT IDs, generated map drift, duplicate headings, agent-governance duplication, NEXT resume anchor, and INBOX/TECH_DEBT lifecycle basics.
 
 Severity:

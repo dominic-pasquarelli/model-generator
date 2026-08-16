@@ -42,3 +42,7 @@ Added `docs/design/COMPONENT_SPEC.md`: the implementable companion to the mockup
 
 The owner reviewed the committed mockup set and component spec and instructed that they serve as the guiding, owner-approved UI for implementation. Recorded as Accepted [ADR 0011](decisions/0011-board-mount-designer-ui-direction.md); UI_MOCKUPS, COMPONENT_SPEC, and NEXT now carry the approved status. Approval covers the UI direction only — kernel, export formats, schema, privacy boundary, and license ADRs remain open, and nothing is claimed Built or Verified.
 
+## 2026-08-16 - Local setup and Phase 0 hardening
+
+Merged the owner-approved UI direction PR, hardened the documentation audit so generated-map checks do not fail from date-only drift, documented Windows `python` command variants, made mockup rendering accept `PYTHON_BIN`, and added a regression test for the map-date behavior. ADRs 0004-0008 now contain concrete Phase 0 spike scopes for the semantic fixture, schema migration harness, geometry candidate matrix, STEP/Fusion export gate, and local image/reference posture. Product code remains unbuilt.
+

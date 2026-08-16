@@ -111,10 +111,10 @@ Per UX Vision, nothing in these images implies that:
 Sources live in [`mockups/src/`](mockups/src/) — one HTML file per screen, a shared stylesheet, the fictional board photo SVG, and the isometric bracket SVG. Rendering is documentation tooling, not a product command:
 
 ```bash
-CHROMIUM_BIN=/path/to/chromium docs/design/mockups/src/render.sh
+CHROMIUM_BIN=/path/to/chromium PYTHON_BIN=python3 docs/design/mockups/src/render.sh
 ```
 
-The script captures each page at 1440×900 css (2880×1800 px) with headless Chromium and crops with Pillow, then renders the dark-chrome variants of screens 01, 05, and 09 via the `?theme=dark` switch. Edit the HTML, re-run, and commit both source and PNG.
+The script captures each page at 1440×900 css (2880×1800 px) with headless Chromium and crops with Pillow, then renders the dark-chrome variants of screens 01, 05, and 09 via the `?theme=dark` switch. On Windows, set `PYTHON_BIN=python` if `python3` is unavailable. Edit the HTML, re-run, and commit both source and PNG.
 
 ## Relationship To The UX Spike
 

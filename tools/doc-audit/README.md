@@ -22,6 +22,8 @@ Run tests:
 python3 -m unittest discover tools/doc-audit/tests
 ```
 
+On Windows, use `python` in place of `python3` if the `python3` launcher is unavailable.
+
 ## Scope
 
 The checker validates foundation documentation structure. It does not validate product behavior, geometry, exports, UI, or physical fit.

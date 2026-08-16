@@ -89,6 +89,15 @@ class DocAuditTests(unittest.TestCase):
         findings = doc_audit.audit(root, required_paths=["docs/PROJECT_VISION.md", "docs/DOC_SPEC.md", "docs/MAP.md"])
         self.assertNotIn("ERROR", self.severities(findings), self.messages(findings))
 
+    def test_map_check_ignores_date_only_drift(self):
+        root = self.make_root()
+        self.write(root, "docs/PROJECT_VISION.md", FRONTMATTER + "# Test\n")
+        self.write(root, "docs/DOC_SPEC.md", FRONTMATTER + "# Doc Spec\n")
+        old_map = doc_audit.generate_map(root, updated="2026-01-01")
+        self.write(root, "docs/MAP.md", old_map)
+        findings = doc_audit.audit(root, required_paths=["docs/PROJECT_VISION.md", "docs/DOC_SPEC.md", "docs/MAP.md"])
+        self.assertNotIn("generated map is out of date", self.messages(findings))
+
 
 if __name__ == "__main__":
     unittest.main()

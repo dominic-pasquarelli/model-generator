@@ -43,6 +43,8 @@ Run the audit tool tests:
 python3 -m unittest discover tools/doc-audit/tests
 ```
 
+On Windows, use `python` in place of `python3` if the `python3` launcher is unavailable.
+
 ## Before Starting Product Code
 
 Resolve or deliberately spike the owner decisions listed in [NEXT.md](NEXT.md), especially project schema, geometry kernel, export formats, image/privacy boundary, and first physical-validation fixture. ADR 0003 already selects the Cadence-adjacent browser-first stack with an Electron-compatible path.

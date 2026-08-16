@@ -37,3 +37,29 @@ Which geometry kernel can generate deterministic board-mount geometry, support u
 
 Generate a simple two-hole board mount from semantic inputs, verify expected dimensions, and export in candidate formats. Record failures as evidence, not just preferences.
 
+## Candidate Matrix For Phase 0
+
+| Candidate Path | Why It Stays In Scope | Must Prove | Failure Mode To Record |
+|---|---|---|---|
+| Browser/WASM solid kernel with STEP support | Best match for local-first browser posture. | Generate the fixture bracket without blocking the UI and produce a STEP file for the export gate. | Package size, startup cost, unsupported STEP path, weak diagnostics. |
+| Worker-backed browser geometry adapter | Keeps generation off the main thread while preserving a web MVP. | Deterministic progress, cancel, and error reporting from the same semantic fixture. | Non-deterministic output, difficult transfer of geometry artifacts, poor error mapping. |
+| Electron/local helper around a solid kernel | Preserves the accepted Electron-compatible escape path if browser STEP fails. | Same semantic input produces the same dimensions and export metadata through a local boundary. | Desktop packaging complexity, platform-specific install burden, hidden service dependency. |
+| Mesh-only path | Useful as a preview or diagnostic fallback. | Produce dimensionally correct STL or mesh preview for the fixture. | Cannot satisfy the MVP alone because STEP/Fusion import is the CAD gate. |
+
+## Phase 0 Fixture
+
+Use a synthetic, documented rectangular board-mount fixture so the spike is not blocked on real hardware:
+
+- board outline: rectangle in millimeters;
+- mounting holes: at least two, preferably four, with explicit diameters and fastener type;
+- keep-out: one zone that forces either a warning or a clipped/adjusted generated feature;
+- mount: simple plate plus standoffs, screw or insert bores, base thickness, clearance, tolerance;
+- expected checks: bounding box, hole center distances, hole diameters, standoff height, base thickness, and warnings.
+
+## Spike Exit Criteria
+
+- Geometry is generated only from the semantic fixture.
+- Host-level checks verify dimensions before any preview or export claim.
+- Generation failures include affected entity ids and parameters.
+- ADR 0006 receives matching export evidence or a documented blocker.
+
