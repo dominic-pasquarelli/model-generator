@@ -46,13 +46,16 @@ Things deliberately not adopted: Axon's embedded-platform vocabulary, engine hie
 ### Cadence
 
 - `AGENTS.md`
+- `package.json`
+- `ui/package.json`
+- `docs/decisions/0018-desktop-app-shell.md`
 - `docs/NEXT.md`
 - `docs/HISTORY.md`
 - `docs/INBOX.md`
 - `docs/design/DESIGN_MODE_VISION.md`
 - `docs/decisions/`
 
-Principles adopted: clear separation between ratified direction, visual direction, unbuilt scope, active lane, parked scope, and things a mock must not promise.
+Principles adopted: clear separation between ratified direction, visual direction, unbuilt scope, active lane, parked scope, and things a mock must not promise. The current Cadence package files and desktop-shell ADR also informed Model Generator ADR 0003: use a React/Vite/TypeScript browser-first stack with an Electron-compatible path.
 
 Things deliberately not adopted: music/show domain model, Axon boundary specifics, existing UI terminology, and any source text.
 
@@ -89,4 +92,3 @@ Things deliberately not adopted: Gridfinity feature list, source code, screensho
 Gridfinity Layout Tool is a reference product only. Do not copy its source, screenshots, assets, prose, distinctive visual design, or AGPL-covered implementation into Model Generator without an explicit owner-approved licensing ADR.
 
 The Model Generator repository itself has no selected license at this foundation point. See [ADR 0009](decisions/0009-repository-license-and-third-party-policy.md).
-

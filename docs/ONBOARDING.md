@@ -45,5 +45,4 @@ python3 -m unittest discover tools/doc-audit/tests
 
 ## Before Starting Product Code
 
-Resolve or deliberately spike the owner decisions listed in [NEXT.md](NEXT.md), especially delivery posture, project schema, geometry kernel, export formats, and image/privacy boundary.
-
+Resolve or deliberately spike the owner decisions listed in [NEXT.md](NEXT.md), especially project schema, geometry kernel, export formats, image/privacy boundary, and first physical-validation fixture. ADR 0003 already selects the Cadence-adjacent browser-first stack with an Electron-compatible path.

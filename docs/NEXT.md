@@ -8,30 +8,29 @@ related:
   - docs/PROJECT_VISION.md
   - docs/ARCHITECTURE.md
   - docs/workflows/BOARD_MOUNT_DESIGNER.md
+  - docs/plans/BOARD_MOUNT_DESIGNER_MVP_PLAN.md
 ---
 
 # NEXT
 
 ## START HERE
 
-Resume by opening [ADR 0003](decisions/0003-local-first-product-posture.md) and deciding whether the first implementation target is browser-first/PWA, desktop wrapper, or another posture. Do not start product code until this is either accepted or converted into a bounded spike.
+Resume from [the Board Mount Designer MVP plan](plans/BOARD_MOUNT_DESIGNER_MVP_PLAN.md), Phase 0. ADR 0003 is now Accepted: use a Cadence-adjacent React/Vite/TypeScript browser-first stack with an Electron-compatible path. The next blocking work is the geometry/export decision packet for STEP/Fusion evidence.
 
 ## Active Foundation Follow-Through
 
 | Order | Work | Exit Condition | Evidence |
 |---:|---|---|---|
-| 1 | Owner decision: delivery posture | ADR 0003 accepted or spike scoped | Owner ruling or spike plan |
-| 2 | Geometry/export feasibility spike | ADRs 0005 and 0006 updated with measured options | Candidate matrix and small generated-geometry evidence |
-| 3 | Canonical project-schema spike | ADRs 0004 and 0007 updated | Draft schema, unknown-vs-zero examples, migration fixture |
-| 4 | Image/privacy boundary decision | ADR 0008 accepted or narrowed | Local/reference handling decision |
+| 1 | Geometry/export decision packet | ADRs 0005 and 0006 updated with measured spike plan for STEP/Fusion | Candidate matrix and spike scope |
+| 2 | Canonical project-schema spike | ADRs 0004 and 0007 updated | Draft schema, unknown-vs-zero examples, migration fixture |
+| 3 | Image/privacy boundary decision | ADR 0008 accepted or narrowed | Local/reference handling decision |
+| 4 | Phase 1 app skeleton | Cadence-adjacent React/Vite/TS shell runs locally with Board Mount Designer only | Local dev/test commands |
 | 5 | First UX/workflow spike | Low-fidelity Board Mount Designer flow covers required states | UX artifact and usability notes |
 | 6 | Modular mounting direction decision | Decide whether the first Board Mount Designer slice includes a standard attachment interface or keeps it deferred | Owner ruling, ADR, or spike plan |
 | 7 | Physical-validation plan | First board, printer/material profile, and fit checks named | Validation plan document or ADR |
-| 8 | Smallest implementation slice | A basic calibrated board outline and two mounting holes can save/load and validate | Host/UI tests appropriate to selected stack |
 
 ## Open Owner Decisions
 
-- Delivery posture.
 - Repository license.
 - Geometry kernel.
 - Export format expectations.
