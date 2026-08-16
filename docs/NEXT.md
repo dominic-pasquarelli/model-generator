@@ -25,7 +25,7 @@ Resume from [the Board Mount Designer MVP plan](plans/BOARD_MOUNT_DESIGNER_MVP_P
 | 2 | Canonical project-schema spike | ADRs 0004 and 0007 updated | Draft schema, unknown-vs-zero examples, migration fixture |
 | 3 | Image/privacy boundary decision | ADR 0008 accepted or narrowed | Local/reference handling decision |
 | 4 | Phase 1 app skeleton | Cadence-adjacent React/Vite/TS shell runs locally with Board Mount Designer only | Local dev/test commands |
-| 5 | First UX/workflow spike | Low-fidelity Board Mount Designer flow covers required states | Static Direction mockups exist ([UI mockups](design/UI_MOCKUPS.md)); interactive flow and usability notes outstanding |
+| 5 | First UX/workflow spike | Low-fidelity Board Mount Designer flow covers required states | Static Direction mockups ([UI mockups](design/UI_MOCKUPS.md)) and an implementable [component spec](design/COMPONENT_SPEC.md) with light/dark tokens exist; interactive flow and usability notes outstanding |
 | 6 | Modular mounting direction decision | Decide whether the first Board Mount Designer slice includes a standard attachment interface or keeps it deferred | Owner ruling, ADR, or spike plan |
 | 7 | Physical-validation plan | First board, printer/material profile, and fit checks named | Validation plan document or ADR |
 

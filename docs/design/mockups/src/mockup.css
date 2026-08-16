@@ -51,6 +51,68 @@
   --mono: "JetBrains Mono", "SF Mono", "Cascadia Code", "DejaVu Sans Mono", monospace;
 }
 
+/* ---------- dark theme ----------
+   The editing canvas, status bar, and canvas-floating elements are theme-invariant
+   (always dark). Dark mode restyles the application chrome: panels, rails,
+   inspectors, dialogs, and the library. Activate with <html data-theme="dark">;
+   mockup pages also accept ?theme=dark in the URL. */
+
+:root[data-theme="dark"] {
+  --bg: #101318;
+  --panel: #171b22;
+  --panel-2: #1d222b;
+  --panel-3: #232935;
+  --border: #2a303c;
+  --border-strong: #39414f;
+  --text: #eef1f6;
+  --text-2: #aab4c4;
+  --text-3: #7c8798;
+  --accent: #6d68f0;
+  --accent-strong: #5b55e8;
+  --accent-soft: #24284a;
+  --accent-border: #45499b;
+  --ok: #53d08a;
+  --ok-bg: #132a1d;
+  --ok-border: #1f4630;
+  --warn: #f0b13e;
+  --warn-bg: #2b220e;
+  --warn-border: #4d3c17;
+  --err: #f4695f;
+  --err-bg: #2b1512;
+  --err-border: #55231e;
+  --info: #9db7d4;
+  --info-bg: #17202b;
+  --info-border: #29384a;
+  --measured: #6aa6f8;
+  --measured-bg: #12213a;
+  --measured-border: #234170;
+  --inferred: #f0b13e;
+  --inferred-bg: #2b220e;
+  --inferred-border: #4d3c17;
+  --uncal: #97a4b5;
+  --uncal-bg: #1d232d;
+  --uncal-border: #333c49;
+  --generated: #a78bfa;
+  --generated-bg: #221a38;
+  --generated-border: #3d2f63;
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 3px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 4px 10px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.35);
+  --shadow-pop: 0 14px 34px rgba(0, 0, 0, 0.6), 0 2px 8px rgba(0, 0, 0, 0.45);
+}
+:root[data-theme="dark"] .control { box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.25); }
+:root[data-theme="dark"] .control.is-invalid { background: #241315; box-shadow: 0 0 0 3px rgba(244, 105, 96, 0.14); }
+:root[data-theme="dark"] .control.is-focus { box-shadow: 0 0 0 3px rgba(109, 104, 240, 0.25); }
+:root[data-theme="dark"] .btn { background: var(--panel-2); }
+:root[data-theme="dark"] .btn-primary { background: var(--accent); }
+:root[data-theme="dark"] .btn-ghost { background: transparent; }
+:root[data-theme="dark"] .btn-danger-soft { background: var(--err-bg); }
+:root[data-theme="dark"] .step.is-done .n { border-color: var(--ok-border); }
+:root[data-theme="dark"] .fmt-card .radio { background: var(--panel-3); }
+:root[data-theme="dark"] .fmt-card.is-on .radio { background: var(--accent); box-shadow: inset 0 0 0 3.5px var(--panel); }
+:root[data-theme="dark"] .fmt-card.is-on { box-shadow: 0 0 0 3px rgba(109, 104, 240, 0.16); }
+:root[data-theme="dark"] .seg > div.is-on { background: var(--panel-3); }
+:root[data-theme="dark"] .orow .oic { background: var(--panel-3); }
+
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
 html, body { background: var(--bg); }

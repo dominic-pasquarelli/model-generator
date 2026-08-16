@@ -77,3 +77,34 @@ Disposition:
 - No tech debt recorded.
 - No captured INBOX items recorded.
 
+## 2026-08-16 - Component spec and dark mode pass
+
+Scope: `docs/design/COMPONENT_SPEC.md`, dark theme tokens in the mockup design system, three dark reference renders, UI_MOCKUPS/NEXT/HISTORY updates, regenerated map.
+
+Branch/commit: `claude/app-ui-mockups-kvevmh`; follows the UI mockup direction pass on the same branch.
+
+Commands:
+
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- Spec tokens and metrics are extracted from `mockups/src/mockup.css`, which now implements both themes and is named the source of truth on divergence.
+- Dark theme is a token swap (`:root[data-theme="dark"]`) plus enumerated component overrides; the editing canvas, status bar, and canvas-floating elements are documented as theme-invariant.
+- Dark renders committed for the library, editor, and dialog-sheet screens; `render.sh` reproduces them.
+- Spec repeats no authority it does not have: kernel, export formats, schema, privacy boundary, license, responsive breakpoints, and final style ratification remain explicitly open.
+
+Findings:
+
+- ERROR: none.
+- WARN: none new; open Proposed decisions unchanged.
+- INFO: contrast pairs are asserted from the palette and should be re-verified with a contrast checker during the Phase 1 skeleton.
+
+Disposition:
+
+- Component extraction into shared packages stays deferred per ADR 0003 until a real second consumer exists.
+- No tech debt recorded.
+- No captured INBOX items recorded.
+

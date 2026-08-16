@@ -6,6 +6,7 @@ updated: 2026-08-16
 audited: 2026-08-16
 related:
   - docs/UX_VISION.md
+  - docs/design/COMPONENT_SPEC.md
   - docs/workflows/BOARD_MOUNT_DESIGNER.md
   - docs/plans/BOARD_MOUNT_DESIGNER_MVP_PLAN.md
   - docs/decisions/0003-local-first-product-posture.md
@@ -73,7 +74,19 @@ The nine screens walk the [minimum user journey](../workflows/BOARD_MOUNT_DESIGN
 
 ![Early state sheet](mockups/09-states.png)
 
+## Dark Mode
+
+The design system is fully token-themed: dark mode restyles the application chrome (panels, rails, inspectors, dialogs, library) while the editing canvas stays a dark instrument surface in both themes. Three representative dark renders are committed as references — the full token tables live in the [component spec](COMPONENT_SPEC.md), and any mockup page can be viewed dark by appending `?theme=dark`.
+
+![Library, dark chrome](mockups/01-library-dark.png)
+
+![Editor, dark chrome](mockups/05-outline-holes-dark.png)
+
+![Dialog states, dark chrome](mockups/09-states-dark.png)
+
 ## Design Language Notes
+
+The implementable version of these notes — complete component inventory, design tokens for both themes, layout metrics, canvas mark specs, interaction contracts, and accessibility rules — is the [Board Mount Designer Component Spec](COMPONENT_SPEC.md).
 
 - Light application chrome around a dark editing canvas; one indigo accent; amber/red/blue/green reserved for state meaning.
 - State chips use the exact [UX Vision state vocabulary](../UX_VISION.md) — Uncalibrated, Inferred, Measured, Confirmed, Generated, Exported — always icon + label, never color alone.
@@ -101,7 +114,7 @@ Sources live in [`mockups/src/`](mockups/src/) — one HTML file per screen, a s
 CHROMIUM_BIN=/path/to/chromium docs/design/mockups/src/render.sh
 ```
 
-The script captures each page at 1440×900 css (2880×1800 px) with headless Chromium and crops with Pillow. Edit the HTML, re-run, and commit both source and PNG.
+The script captures each page at 1440×900 css (2880×1800 px) with headless Chromium and crops with Pillow, then renders the dark-chrome variants of screens 01, 05, and 09 via the `?theme=dark` switch. Edit the HTML, re-run, and commit both source and PNG.
 
 ## Relationship To The UX Spike
 

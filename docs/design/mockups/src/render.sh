@@ -13,13 +13,12 @@ cd "$(dirname "$0")"
 
 CHROMIUM_BIN="${CHROMIUM_BIN:-chromium}"
 
-for f in [0-9][0-9]-*.html; do
-  out="../${f%.html}.png"
+capture() { # capture <url> <out.png>
   "$CHROMIUM_BIN" \
     --headless=new --no-sandbox --disable-gpu \
     --force-device-scale-factor=2 --window-size=1440,992 --hide-scrollbars \
-    --screenshot="$out" "file://$PWD/$f" 2>/dev/null
-  python3 - "$out" <<'PY'
+    --screenshot="$2" "$1" 2>/dev/null
+  python3 - "$2" <<'PY'
 import sys
 from PIL import Image
 path = sys.argv[1]
@@ -29,5 +28,15 @@ if im.size != (2880, 1800):
 else:
     im.save(path, optimize=True)
 PY
-  echo "rendered $out"
+  echo "rendered $2"
+}
+
+for f in [0-9][0-9]-*.html; do
+  capture "file://$PWD/$f" "../${f%.html}.png"
+done
+
+# Dark-chrome reference variants (the canvas is theme-invariant; these show the
+# dark application chrome on representative screens — see COMPONENT_SPEC.md).
+for f in 01-library.html 05-outline-holes.html 09-states.html; do
+  capture "file://$PWD/$f?theme=dark" "../${f%.html}-dark.png"
 done

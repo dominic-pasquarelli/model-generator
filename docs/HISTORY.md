@@ -34,3 +34,7 @@ Established product vision, workflow docs, conceptual architecture, tool contrac
 
 Added nine static Board Mount Designer UI mockups under `docs/design/` — rendered PNGs plus the hand-authored HTML/SVG sources and render script — covering the minimum user journey and every required early state from UX Vision. The mockups are Direction only: they encode the workflow rail, 2D/3D workspace shape, state vocabulary chips, validation honesty, and export gating without claiming any feature is Built or Verified. The interactive UX spike with usability notes remains open in NEXT.
 
+## 2026-08-16 - Component spec and dark mode pass
+
+Added `docs/design/COMPONENT_SPEC.md`: the implementable companion to the mockups with the full modular component inventory, design tokens for light and dark themes, layout metrics, canvas overlay mark specifications, interaction contracts, accessibility requirements, state-vocabulary binding, a React/Radix/Tailwind implementation mapping, and a fidelity checklist. The mockup design system itself gained a token-driven dark theme (`?theme=dark` on any mockup page) with three committed dark reference renders; the canvas remains theme-invariant. Everything stays Direction — no visual style is ratified and no product code exists.
+

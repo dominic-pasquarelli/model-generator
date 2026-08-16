@@ -1,6 +1,7 @@
 <!doctype html>
 <html><head><meta charset="utf-8"><title>09 — Required early states</title>
 <link rel="stylesheet" href="mockup.css">
+<script>if (new URLSearchParams(location.search).get("theme") === "dark") document.documentElement.dataset.theme = "dark";</script>
 <style>
   body { background: var(--bg); }
   .sheet { width: 1440px; height: 900px; padding: 30px 44px; display: flex; flex-direction: column; }
@@ -12,7 +13,7 @@
   .grid { flex: 1; display: grid; grid-template-columns: repeat(3, 1fr); grid-template-rows: 1fr 1fr; gap: 22px 22px; }
   .cell { display: flex; flex-direction: column; min-height: 0; }
   .clabel { font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-3); margin-bottom: 8px; display: flex; gap: 8px; align-items: center; }
-  .clabel .cnum { width: 17px; height: 17px; border-radius: 50%; background: var(--text-2); color: #fff; font-size: 10px; display: flex; align-items: center; justify-content: center; letter-spacing: 0; }
+  .clabel .cnum { width: 17px; height: 17px; border-radius: 50%; background: var(--text-2); color: var(--panel); font-size: 10px; display: flex; align-items: center; justify-content: center; letter-spacing: 0; }
   .card { flex: 1; background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-2); overflow: hidden; display: flex; flex-direction: column; }
   .chead { display: flex; align-items: center; gap: 9px; padding: 11px 14px; border-bottom: 1px solid var(--border); }
   .chead .hic { width: 26px; height: 26px; border-radius: 8px; display: flex; align-items: center; justify-content: center; flex: none; }
