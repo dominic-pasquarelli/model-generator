@@ -16,7 +16,7 @@ related:
 
 ## Status
 
-This is a conceptual architecture. No application runtime, UI framework, geometry kernel, storage engine, or export format is selected yet.
+This is a conceptual architecture. ADR 0003 selects a Cadence-adjacent local-first browser stack with an Electron-compatible path. No geometry kernel, storage engine, or export format is selected yet.
 
 ## Canonical Data Flow
 
@@ -83,11 +83,10 @@ Authentication, cloud sync, sharing, telemetry, and collaboration are adapters a
 
 | Decision | Current Status | ADR |
 |---|---:|---|
-| Product delivery posture | Proposed | [ADR 0003](decisions/0003-local-first-product-posture.md) |
+| Product delivery posture | Accepted | [ADR 0003](decisions/0003-local-first-product-posture.md) |
 | Canonical semantic document model | Proposed | [ADR 0004](decisions/0004-canonical-semantic-document-model.md) |
 | Geometry kernel | Proposed | [ADR 0005](decisions/0005-geometry-kernel-selection.md) |
 | Export format contract | Proposed | [ADR 0006](decisions/0006-initial-export-format-contract.md) |
 | Project schema and migrations | Proposed | [ADR 0007](decisions/0007-project-file-schema-and-migration-policy.md) |
 | Image processing and privacy | Proposed | [ADR 0008](decisions/0008-image-processing-and-privacy-boundary.md) |
 | Repository license and third-party policy | Proposed | [ADR 0009](decisions/0009-repository-license-and-third-party-policy.md) |
-

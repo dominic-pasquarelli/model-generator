@@ -103,7 +103,7 @@ Missing data means unknown or not captured. It does not mean zero.
 
 ## Open Questions
 
-- Which delivery posture should host the first editor?
+- How should the accepted Cadence-adjacent browser stack preserve a later Electron path?
 - Which geometry kernel supports the needed exact/editable output?
 - Which export formats are supported in the first slice?
 - What is the minimum project schema for board definitions?

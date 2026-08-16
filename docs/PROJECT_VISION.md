@@ -108,7 +108,7 @@ These targets are Proposed until measured:
 
 ## Open Owner Decisions
 
-- Product posture: browser-first/PWA, desktop wrapper, or another delivery model.
+- Product posture is accepted in ADR 0003: Cadence-adjacent browser-first stack with Electron-compatible path.
 - Canonical project-file format and migration policy.
 - Geometry kernel and export format expectations.
 - Image/reference processing and privacy boundary.

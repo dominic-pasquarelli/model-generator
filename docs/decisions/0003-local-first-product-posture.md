@@ -2,7 +2,7 @@
 title: ADR 0003 Local-First Product Posture
 tier: decision
 adr: 0003
-status: proposed
+status: accepted
 date: 2026-08-16
 updated: 2026-08-16
 audited: 2026-08-16
@@ -16,25 +16,37 @@ related:
 
 ## Status
 
-Proposed. Owner decision needed.
+Accepted.
 
 ## Question
 
-Should the first implementation be browser-first/PWA, desktop wrapper, or another delivery posture?
+What product delivery posture should the MVP use?
 
-## Options
+## Decision
 
-| Option | Benefits | Risks |
-|---|---|---|
-| Browser-first/PWA | Low friction, visual workflow, local files possible, aligns with reference-product usability. | Geometry kernels and file access may be constrained. |
-| Desktop wrapper | Stronger local file system and compute integration. | More packaging overhead before the first workflow proves value. |
-| Library/CLI first | Fast host-level geometry experimentation. | Delays the direct-manipulation UX that defines the product. |
+Use a **Cadence-adjacent local-first browser stack** for the first implementation:
 
-## Recommendation
+- TypeScript;
+- React + Vite UI;
+- Tailwind-compatible styling and the same general component vocabulary used by Cadence/Axon web surfaces where practical;
+- Node-based workspace scripts and local commands;
+- browser-first app shell for image/reference editing and 3D preview;
+- Electron-compatible structure so a desktop wrapper remains a realistic path;
+- no mandatory account or cloud dependency for the MVP.
 
-Start with a browser-first local workflow only if the geometry/export feasibility spike shows the required kernel and file behavior are practical. Otherwise, narrow the first spike around the geometry layer before committing to UI delivery.
+The app should stay close enough to Cadence that UI components, interaction patterns, and possibly extracted shared packages can be reused later. Do not directly couple Model Generator to Cadence or Axon internals during the MVP.
 
-## Work Blocked
+## Context
 
-Product app scaffolding and runtime-specific commands.
+The owner wants a stack similar to Cadence because it supports browser-based work, keeps Electron possible, and improves the odds that useful components or conventions can be shared between Model Generator, Axon, and Cadence.
 
+Cadence currently uses a React/Vite/Tailwind TypeScript UI with Node workspace scripts and an Electron shell path. Model Generator should follow that family unless a measured geometry/export constraint forces a bounded exception.
+
+## Consequences
+
+- Product app scaffolding is unblocked after the MVP decision packet defines the geometry/export spike.
+- ADR 0005 still owns geometry-kernel choice.
+- ADR 0006 still owns export format proof and Fusion evidence.
+- A local helper, worker, or Electron packaging path may be introduced if STEP generation cannot run cleanly in the browser.
+- Shared components should be extracted only after a real second consumer exists or a stable design-system contract emerges.
+- The MVP must not import private Cadence/Axon implementation details simply because the stack is similar.
