@@ -23,6 +23,12 @@ The owner-confirmed seed is a toolbox for recurring modeling inconveniences. The
 
 This project should bank value one tool at a time. A finished Board Mount Designer is a complete useful deliverable even if later assembly tools never ship.
 
+## Prototype-To-Service Direction
+
+Owner-confirmed direction: the larger product should help move from proof of concept to in-service projects faster. A useful path is a modular bracket and mounting system that can be printed quickly, stay rigid enough for real use, and mount directly into final parts or enclosures. This would let a maker move from breadboard/prototype to functional deployment, then upgrade or refine later without throwing away the mounting concept.
+
+This does not ratify the owner's older Gen 1 dimensions or slot geometry as the Model Generator standard. Those notes are historical input captured in [INBOX](INBOX.md). The product implication is stronger than the exact geometry: Board Mount Designer and later assembly work should preserve attachment interfaces, hardware choices, and modular mounting constraints as semantic facts instead of reducing them to anonymous meshes.
+
 ## Primary User
 
 The first user is the owner/maker designing electronics mounts, brackets, internal structures, and enclosures. The architecture should not prevent later usefulness to other makers or small engineering workflows, but the first workflow should not be diluted for hypothetical audiences.
@@ -48,6 +54,7 @@ Evidence classes include host-level checks, browser-level checks, generated-geom
 |---|---:|---|
 | Board Mount Designer | Owner-confirmed / first value slice | Create reusable board and mount definitions from references plus measurements. |
 | Board Mount Assembly | Future possibility | Compose board/mount definitions into larger electronics pods or internal structures. |
+| Modular bracket/mounting system | Direction | Create quickly printable, rigid, reusable mounting interfaces that can move from prototype to final parts. |
 
 ## Goals
 
@@ -107,4 +114,3 @@ These targets are Proposed until measured:
 - Image/reference processing and privacy boundary.
 - Repository license and third-party-code policy.
 - First physical-validation fixture strategy.
-
