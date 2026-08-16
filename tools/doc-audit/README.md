@@ -22,7 +22,7 @@ Run tests:
 python3 -m unittest discover tools/doc-audit/tests
 ```
 
-On Windows, use `python` in place of `python3` if the `python3` launcher is unavailable.
+For platform-specific command notes, including the Windows Python launcher fallback, see [Onboarding](../../docs/ONBOARDING.md).
 
 ## Scope
 

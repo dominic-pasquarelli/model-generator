@@ -81,7 +81,7 @@ Regenerate `docs/MAP.md` with:
 python3 tools/doc-audit/doc_audit.py --write-map
 ```
 
-On Windows, use `python` in place of `python3` if the `python3` launcher is unavailable.
+For platform-specific command notes, including the Windows Python launcher fallback, see [Onboarding](ONBOARDING.md).
 
 The audit checks that the generated region matches the current doc set.
 

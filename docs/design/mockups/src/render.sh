@@ -18,14 +18,20 @@ capture() { # capture <url> <out.png>
   "$CHROMIUM_BIN" \
     --headless=new --no-sandbox --disable-gpu \
     --force-device-scale-factor=2 --window-size=1440,992 --hide-scrollbars \
-    --screenshot="$2" "$1" 2>/dev/null
+    --screenshot="$2" "$1"
   "$PYTHON_BIN" - "$2" <<'PY'
 import sys
 from PIL import Image
 path = sys.argv[1]
 im = Image.open(path)
-if im.size != (2880, 1800):
-    im.crop((0, 0, 2880, 1800)).save(path, optimize=True)
+target = (2880, 1800)
+if im.size[0] < target[0] or im.size[1] < target[1]:
+    raise SystemExit(
+        f"{path}: screenshot is {im.size[0]}x{im.size[1]}, smaller than "
+        f"{target[0]}x{target[1]}; check CHROMIUM_BIN/device-scale support"
+    )
+if im.size != target:
+    im.crop((0, 0, target[0], target[1])).save(path, optimize=True)
 else:
     im.save(path, optimize=True)
 PY

@@ -43,7 +43,7 @@ Run the audit tool tests:
 python3 -m unittest discover tools/doc-audit/tests
 ```
 
-On Windows, use `python` in place of `python3` if the `python3` launcher is unavailable.
+Windows note: use `python` for the same commands if `python3` resolves to the WindowsApps Store shim or is otherwise unavailable.
 
 ## Before Starting Product Code
 

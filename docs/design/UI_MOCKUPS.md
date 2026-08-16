@@ -114,7 +114,7 @@ Sources live in [`mockups/src/`](mockups/src/) — one HTML file per screen, a s
 CHROMIUM_BIN=/path/to/chromium PYTHON_BIN=python3 docs/design/mockups/src/render.sh
 ```
 
-The script captures each page at 1440×900 css (2880×1800 px) with headless Chromium and crops with Pillow, then renders the dark-chrome variants of screens 01, 05, and 09 via the `?theme=dark` switch. On Windows, set `PYTHON_BIN=python` if `python3` is unavailable. Edit the HTML, re-run, and commit both source and PNG.
+The script captures each page at 1440×900 css (2880×1800 px) with headless Chromium and crops with Pillow, then renders the dark-chrome variants of screens 01, 05, and 09 via the `?theme=dark` switch. Use `PYTHON_BIN` to select the Python executable; see [Onboarding](../ONBOARDING.md) for the Windows Python launcher fallback. Edit the HTML, re-run, and commit both source and PNG.
 
 ## Relationship To The UX Spike
 

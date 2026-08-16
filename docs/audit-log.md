@@ -172,3 +172,34 @@ Disposition:
 - No tech debt recorded.
 - No captured INBOX items recorded.
 
+## 2026-08-16 - Tooling hardening review follow-up
+
+Scope: review findings against commit `8ba847e`, doc-audit map-date tests, `write_map` date churn, Python fallback documentation duplication, mockup render screenshot validation, NEXT/HISTORY closeout.
+
+Branch/commit: local `main`; follow-up changes pending commit at audit time.
+
+Commands:
+
+- `python tools/doc-audit/doc_audit.py --write-map`
+- `python tools/doc-audit/doc_audit.py --check`
+- `python -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- The date-drift regression test now asserts the old fixture date is actually present, so a broken `generate_map(..., updated=...)` parameter cannot pass trivially.
+- `write_map` preserves the existing `docs/MAP.md` `updated` date when the generated map content is otherwise unchanged, avoiding date-only closeout diffs.
+- Windows Python fallback wording has one canonical home in Onboarding; other mentions link there.
+- `render.sh` no longer suppresses Chromium stderr and fails when the screenshot is smaller than 2880x1800 instead of allowing Pillow to pad the image.
+
+Findings:
+
+- ERROR: none after audit.
+- WARN: no new product warnings; open Proposed ADR decisions remain as before.
+- INFO: product code still does not exist.
+
+Disposition:
+
+- NEXT still points to the geometry/export spike and STEP/Fusion evidence as the next blocking work.
+- No tech debt recorded.
+- No captured INBOX items recorded.
+

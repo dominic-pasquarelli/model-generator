@@ -15,7 +15,7 @@ related:
 
 ## START HERE
 
-Resume from [the Board Mount Designer MVP plan](plans/BOARD_MOUNT_DESIGNER_MVP_PLAN.md), Phase 0. ADR 0003 is Accepted, ADR 0011 is Accepted, and ADRs 0004-0008 now contain concrete Phase 0 spike scopes. The next blocking work is to run the geometry/export spike against the semantic fixture and record STEP/Fusion evidence.
+Resume from [the Board Mount Designer MVP plan](plans/BOARD_MOUNT_DESIGNER_MVP_PLAN.md), Phase 0. Tooling hardening follow-up is complete, ADR 0003 is Accepted, ADR 0011 is Accepted, and ADRs 0004-0008 now contain concrete Phase 0 spike scopes. The next blocking work is to run the geometry/export spike against the semantic fixture and record STEP/Fusion evidence.
 
 ## Active Foundation Follow-Through
 

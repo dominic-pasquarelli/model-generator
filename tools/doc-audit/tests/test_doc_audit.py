@@ -94,9 +94,30 @@ class DocAuditTests(unittest.TestCase):
         self.write(root, "docs/PROJECT_VISION.md", FRONTMATTER + "# Test\n")
         self.write(root, "docs/DOC_SPEC.md", FRONTMATTER + "# Doc Spec\n")
         old_map = doc_audit.generate_map(root, updated="2026-01-01")
+        self.assertIn("updated: 2026-01-01", old_map)
         self.write(root, "docs/MAP.md", old_map)
         findings = doc_audit.audit(root, required_paths=["docs/PROJECT_VISION.md", "docs/DOC_SPEC.md", "docs/MAP.md"])
         self.assertNotIn("generated map is out of date", self.messages(findings))
+
+    def test_write_map_preserves_date_when_only_date_would_change(self):
+        root = self.make_root()
+        self.write(root, "docs/PROJECT_VISION.md", FRONTMATTER + "# Test\n")
+        self.write(root, "docs/DOC_SPEC.md", FRONTMATTER + "# Doc Spec\n")
+        old_map = doc_audit.generate_map(root, updated="2000-01-01")
+        self.write(root, "docs/MAP.md", old_map)
+        doc_audit.write_map(root)
+        self.assertIn("updated: 2000-01-01", (root / "docs/MAP.md").read_text(encoding="utf-8"))
+
+    def test_write_map_refreshes_date_when_content_changes(self):
+        root = self.make_root()
+        self.write(root, "docs/PROJECT_VISION.md", FRONTMATTER + "# Test\n")
+        self.write(root, "docs/DOC_SPEC.md", FRONTMATTER + "# Doc Spec\n")
+        self.write(root, "docs/MAP.md", doc_audit.generate_map(root, updated="2000-01-01"))
+        self.write(root, "docs/AUDIT.md", FRONTMATTER.replace("Test Doc", "Audit Protocol") + "# Audit\n")
+        doc_audit.write_map(root)
+        new_map = (root / "docs/MAP.md").read_text(encoding="utf-8")
+        self.assertNotIn("updated: 2000-01-01", new_map)
+        self.assertIn("[Audit Protocol](AUDIT.md)", new_map)
 
 
 if __name__ == "__main__":

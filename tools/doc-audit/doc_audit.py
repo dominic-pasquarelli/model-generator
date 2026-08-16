@@ -173,6 +173,24 @@ def generate_map(root: Path, updated: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def without_frontmatter_updated(text: str) -> str:
+    lines = text.splitlines()
+    if not lines or lines[0] != "---":
+        return text
+    stripped: list[str] = []
+    in_frontmatter = True
+    removed = False
+    for index, line in enumerate(lines):
+        if index > 0 and in_frontmatter and line == "---":
+            in_frontmatter = False
+        if in_frontmatter and not removed and line.startswith("updated:"):
+            removed = True
+            continue
+        stripped.append(line)
+    trailing_newline = "\n" if text.endswith(("\n", "\r\n")) else ""
+    return "\n".join(stripped) + trailing_newline
+
+
 def local_link_target(path: Path, link: str) -> Path | None:
     if re.match(r"^[a-zA-Z][a-zA-Z0-9+.-]*:", link):
         return None
@@ -307,7 +325,16 @@ def audit(root: Path, required_paths: Iterable[str] = REQUIRED_PATHS) -> list[Fi
 
 def write_map(root: Path) -> None:
     map_path = root / "docs/MAP.md"
-    map_path.write_text(generate_map(root), encoding="utf-8")
+    updated = None
+    if map_path.exists():
+        actual = map_path.read_text(encoding="utf-8")
+        actual_meta, _ = parse_frontmatter(actual)
+        current_updated = actual_meta.get("updated")
+        if is_date(current_updated):
+            candidate = generate_map(root, str(current_updated))
+            if without_frontmatter_updated(actual) == without_frontmatter_updated(candidate):
+                updated = str(current_updated)
+    map_path.write_text(generate_map(root, updated), encoding="utf-8")
 
 
 def main(argv: list[str] | None = None) -> int:
