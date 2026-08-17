@@ -2,8 +2,8 @@
 title: History
 tier: record
 status: append-only
-updated: 2026-08-16
-audited: 2026-08-16
+updated: 2026-08-17
+audited: 2026-08-17
 related:
   - docs/NEXT.md
   - docs/audit-log.md
@@ -49,4 +49,21 @@ Merged the owner-approved UI direction PR, hardened the documentation audit so g
 ## 2026-08-16 - Tooling hardening review follow-up
 
 Closed the review findings on the setup hardening pass: strengthened the map-date regression test, made `write_map` preserve the existing map date when only the date would change, consolidated Windows Python fallback guidance into Onboarding, and made mockup rendering fail if Chromium returns an undersized screenshot. Product code remains unbuilt.
+
+## 2026-08-17 - Phase 1 app skeleton and interactive Board Mount Designer spike
+
+First product code lands in `src/`. Built a Cadence-adjacent React + Vite + TypeScript local-first app (ADR 0003) implementing the owner-approved UI (ADR 0011) and the full Board Mount Designer workflow shell.
+
+Built (present in code):
+
+- Design system ported from `mockups/src/mockup.css` as token CSS (light + dark chrome, theme-invariant canvas) plus a lucide-style inline icon set — no external fonts or CDNs.
+- The complete component inventory from `COMPONENT_SPEC.md`: chrome (top bar, breadcrumb, workflow rail, inspector, status bar, validation panel), primitives (buttons, chips/state chips, fields, segmented control, select, checkbox, radio cards, progress, spinner, dialog/popover/scrim), library cards, canvas toolbar/zoom, and the overlay marks (outline, hole markers by state, keep-out zones, calibration line, conflict rings, label pills).
+- A canonical semantic model with the `Val<T>` unknown/inferred/measured/confirmed wrapper (unknown is never zero), centralized mm/px units and a calibration transform with plausibility rejection, a versioned JSON schema with a forward-migration harness and a v0→v1 fixture, a validation engine driving step flags + the validation panel + export readiness, a replaceable `GeometryAdapter` boundary, and a deterministic ILLUSTRATIVE mock generator (no kernel; `exactSolid: false`).
+- Interactive flow: library → project → reference (upload or sample) → single-line calibration (with rejection) → outline/holes/keep-outs by direct manipulation with exact typed editing → mount strategy → synchronized 2D/3D preview → export dialog with ready/blocked/progress/failed/complete states and a real metadata sidecar. localStorage persistence.
+
+Verified (browser-level and host-level): 26 host-level unit tests (units, calibration, schema/migration, validation, generation determinism) and a 6-case Playwright journey pass headless; `tsc` typechecks and `vite build` bundles.
+
+Not built / still deferred (each has a proposed plan under `docs/plans/`): a real solid geometry kernel, a valid STEP body and the Fusion import evidence gate, a hardened project file schema and persistence, robust image/camera capture and skew-aware calibration, and the full test/a11y/CI system. No physical fit is claimed. The 3D bracket is an illustration; the STEP/STL artifacts are labelled placeholders plus a real sidecar, not validated CAD.
+
+Also added five proposed implementation-plan documents under `docs/plans/` for the deferred features, and taught the doc-audit tool to skip `node_modules` and build/test output now that product code exists.
 

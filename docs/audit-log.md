@@ -2,8 +2,8 @@
 title: Audit Log
 tier: record
 status: append-only
-updated: 2026-08-16
-audited: 2026-08-16
+updated: 2026-08-17
+audited: 2026-08-17
 related:
   - docs/AUDIT.md
   - docs/DOC_SPEC.md
@@ -201,5 +201,37 @@ Disposition:
 
 - NEXT still points to the geometry/export spike and STEP/Fusion evidence as the next blocking work.
 - No tech debt recorded.
+- No captured INBOX items recorded.
+
+## 2026-08-17 - Phase 1 app skeleton and interactive spike
+
+Scope: first product code under `src/` (React + Vite + TypeScript Board Mount Designer shell + interactive editor + canonical model + validation + illustrative generator + export pipeline), Playwright e2e, five proposed `docs/plans/` feature plans, doc-audit ignore-list for vendored/build output, README/AGENTS/NEXT/ONBOARDING/HISTORY closeout, regenerated map.
+
+Branch/commit: `claude/app-ui-shell-features-3hg2jc`; base `main` at branch point `43b2dbc`.
+
+Commands:
+
+- `pnpm run typecheck` · `pnpm test` · `pnpm run build` · `pnpm exec playwright test`
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- 26 host-level unit tests pass (units/calibration transform + plausibility rejection, schema load/save + v0→v1 migration + corrupt-file handling, validation severity + export readiness, generation determinism and guards).
+- 6 Playwright cases pass headless against a production build: library seed, theme toggle, sample project auto-generates and enables export, export reaches complete, required-states showcase, and new-project → add reference → reject-then-accept calibration.
+- `tsc -b` typechecks the app and node configs; `vite build` bundles (86 modules).
+- doc-audit tests still pass; the audit now skips `node_modules`/build output and PASSes with one INFO ("product code exists").
+
+Findings:
+
+- ERROR: none after audit.
+- WARN: geometry kernel, STEP/STL export support, hardened project file schema, image/privacy boundary, and repository license remain Proposed; each deferred feature now has a `proposed` plan under `docs/plans/`.
+- INFO: the 3D bracket, generated dimensions, and exported artifacts are illustrative/placeholder — no kernel, no valid STEP body, and no physical fit are claimed. The units toggle stores the unit but the inspector still renders values in millimetres.
+
+Disposition:
+
+- NEXT points to the geometry/export spike (real kernel behind the existing `GeometryAdapter`, then STEP + Fusion evidence) as the next blocking work; the shell is ready for reviewer feedback.
+- No tech debt recorded (the mm-only rendering under the inch toggle is noted here and in NEXT rather than as a TECH_DEBT id).
 - No captured INBOX items recorded.
 

@@ -1,6 +1,6 @@
 # AGENTS.md - Model Generator
 
-This repository is in **foundation / pre-implementation** status. Do not imply that product code, a geometry kernel, export formats, image analysis, or a UI already exists unless the code and evidence exist in this repository.
+This repository now contains a **Phase 1 app skeleton and an interactive Board Mount Designer spike** in `src/` (React + Vite + TypeScript, ADR 0003; owner-approved UI, ADR 0011), verified by host-level unit tests and a headless Playwright journey. What is Built: the app shell and workflow, the canonical semantic model with an unknown/inferred/measured/confirmed value state, the pixel→mm calibration transform, validation, a versioned schema with a migration harness, and a metadata-sidecar export. What is still **not** built — and must not be implied as existing — is a geometry kernel, a valid STEP body or Fusion evidence, a hardened project file format, camera capture or skew-aware calibration, and automatic image analysis. The 3D bracket is an illustration and exported STEP/STL are labelled placeholders. Each deferred feature has a `proposed` plan under `docs/plans/`.
 
 ## Read Order
 
@@ -34,7 +34,18 @@ If the user gives a raw idea, friction note, or future possibility, capture it i
 
 ## Local Commands
 
-The only local commands established today are documentation foundation commands:
+App commands (Node 20+, pnpm):
+
+```bash
+pnpm install
+pnpm dev                    # local dev server (Vite)
+pnpm test                   # host-level unit tests (vitest)
+pnpm run typecheck          # TypeScript project references
+pnpm run build              # production bundle
+pnpm exec playwright test   # headless browser journey (uses the pre-installed Chromium)
+```
+
+Documentation foundation commands:
 
 ```bash
 python3 tools/doc-audit/doc_audit.py --write-map
@@ -43,8 +54,6 @@ python3 -m unittest discover tools/doc-audit/tests
 ```
 
 For platform-specific command notes, including the Windows Python launcher fallback, see [docs/ONBOARDING.md](docs/ONBOARDING.md).
-
-Do not invent product build, preview, export, or app-start commands until product code exists.
 
 ## Closeout Rule
 

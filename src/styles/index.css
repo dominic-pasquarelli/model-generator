@@ -1,0 +1,6 @@
+/* Aggregated design-system entrypoint. Import order matters:
+ * tokens → base reset → component classes → screen-level classes. */
+@import "./tokens.css";
+@import "./base.css";
+@import "./components.css";
+@import "./screens.css";
