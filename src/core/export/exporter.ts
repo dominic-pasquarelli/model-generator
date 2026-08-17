@@ -126,6 +126,7 @@ export function buildExport(project: Project, options: ExportOptions): BuildExpo
     fileName,
     sizeBytes: new Blob([body]).size,
     paramsHash: project.generated?.paramsHash ?? "",
+    generationKey: project.generated?.key ?? "",
     createdAt: now,
     wroteSidecar: options.writeSidecar,
   };

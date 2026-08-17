@@ -7,6 +7,13 @@
  */
 import type { GeneratedModel, Project } from "@/core/project/types";
 
+/**
+ * Identity of the adapter that produced a generation. It is part of the generation
+ * key: swapping the adapter (or bumping its behavior) invalidates prior results, so a
+ * stale generation cannot be trusted across a generator change.
+ */
+export const ACTIVE_ADAPTER_VERSION = "illustrative-mock@1" as const;
+
 export interface GeometryError {
   /** Diagnosable code — never a bare "failed". */
   code: string;

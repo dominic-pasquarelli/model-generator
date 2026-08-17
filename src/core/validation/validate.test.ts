@@ -129,10 +129,47 @@ describe("validateProject", () => {
   });
 });
 
+describe("domain validity (known ≠ valid)", () => {
+  it("rejects a non-positive hole diameter", () => {
+    const p = createSampleProject(1);
+    p.board.holes[0].diameterMm = measured(0);
+    expect(validateProject(p).some((v) => v.id.startsWith("hole-bad-diameter") && v.severity === "error")).toBe(true);
+  });
+
+  it("rejects non-positive mount height inputs", () => {
+    const p = createSampleProject(1);
+    p.mount.standoffHeightMm = measured(-2);
+    expect(validateProject(p).some((v) => v.id === "mount-standoff-nonpositive" && v.severity === "error")).toBe(true);
+  });
+
+  it("rejects a keep-out whose shape and payload disagree", () => {
+    const p = createSampleProject(1);
+    // Discriminator says circle but there is no circle geometry.
+    p.board.keepOuts[0] = { ...p.board.keepOuts[0], shape: "circle", rectPx: undefined, circlePx: undefined };
+    expect(validateProject(p).some((v) => v.id.startsWith("keepout-shape") && v.severity === "error")).toBe(true);
+  });
+
+  it("blocks export with a NON-EMPTY blocker list when the outline is missing", () => {
+    const p = createSampleProject(1);
+    p.board.outline = null;
+    const r = exportReadiness(p);
+    expect(r.ready).toBe(false);
+    expect(r.blockers.length).toBeGreaterThan(0); // never "0 blockers while ready:false"
+    expect(r.blockers.some((b) => b.id === "no-outline")).toBe(true);
+  });
+});
+
 describe("exportReadiness", () => {
   it("is not ready without a generation", () => {
     const p = createProject({ name: "x" });
     expect(exportReadiness(p).ready).toBe(false);
+  });
+
+  it("blocks a fully-drawn board until it is generated, and lists that as a blocker", () => {
+    const p = createSampleProject(1); // no `generated` yet
+    const r = exportReadiness(p);
+    expect(r.ready).toBe(false);
+    expect(r.blockers.some((b) => b.id === "generation-stale")).toBe(true);
   });
 
   it("blocks with an error when the mount height inputs are unknown", () => {

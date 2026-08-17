@@ -5,6 +5,8 @@
  * the absence rather than defaulting to zero.
  */
 import { bbox, type Point, type Rect } from "@/core/geom";
+import { ACTIVE_ADAPTER_VERSION } from "@/core/geometry/adapter";
+import { shortHash } from "@/lib/id";
 import type { MountingHole, Project } from "./types";
 import { isKnown, maybe, type Val } from "./value";
 
@@ -99,37 +101,53 @@ export function rectMm(project: Project, r: Rect): { w: number; h: number } | nu
 }
 
 /**
- * The deterministic parameter tuple that generation hashes. Anything that changes
- * the generated bracket must appear here so preview/export stay in lockstep.
+ * The deterministic parameter tuple that generation hashes, expressed in canonical
+ * BOARD-SPACE MILLIMETRES (not image pixels). Everything geometry-affecting appears
+ * here in full — every outline vertex, every hole center, complete keep-out geometry
+ * — plus the mount parameters and the adapter version. Returns null when the board
+ * frame is unavailable (uncalibrated or no outline), which means generation is not
+ * possible and there is nothing to hash.
+ *
+ * Consequences of board-space canonicalisation:
+ * - Translating the whole image-space definition equally leaves board-mm unchanged →
+ *   same key.
+ * - Moving the outline while holes stay fixed in pixels moves the board origin →
+ *   holes' board-mm change → new key.
+ * - A calibration change rescales every board-mm → new key.
+ * - Two different polygons that share a bounding box hash differently (full vertices).
  */
-export function generationParams(project: Project): Record<string, unknown> {
-  const dims = outlineDims(project);
+export function generationParams(project: Project): Record<string, unknown> | null {
+  const frame = boardFrame(project);
+  if (!frame) return null;
+  const toMm = (p: Point) => roundPoint(pxPointToBoardMm(p, frame));
+  const lenMm = (px: number) => round4(px / frame.pxPerMm);
   const m = project.mount;
+  const outline = project.board.outline!;
   return {
-    // `units` is display-only and never affects geometry, so it is deliberately
-    // excluded — a mm/inch toggle must not change the generated result's hash.
+    adapter: ACTIVE_ADAPTER_VERSION,
     schema: project.schemaVersion,
-    outline: dims ? { w: round4(dims.widthMm), h: round4(dims.heightMm), corners: dims.corners } : null,
-    cornerRadius: numOrNull(project.board.outline?.cornerRadiusMm),
+    // `units` is display-only and never affects geometry, so it is excluded.
+    outline: {
+      vertices: outline.vertices.map(toMm),
+      cornerRadius: numOrNull(outline.cornerRadiusMm),
+    },
     thickness: numOrNull(project.board.thicknessMm),
     holes: project.board.holes.map((h) => ({
       d: numOrNull(h.diameterMm),
       fastener: h.fastener,
-      // Board-mm position keeps the hash stable under pan/zoom (which never change px coords anyway).
-      pos: roundPoint(h.centerPx),
+      pos: toMm(h.centerPx),
     })),
     keepOuts: project.board.keepOuts.map((k) => ({
       shape: k.shape,
       side: k.boardSide,
       clearance: numOrNull(k.clearanceHeightMm),
-      // Keep-out geometry affects seat-clip warnings, so it must be in the hash.
       geom:
         k.shape === "rect" && k.rectPx
-          ? { x: round2p(k.rectPx.x), y: round2p(k.rectPx.y), w: round2p(k.rectPx.w), h: round2p(k.rectPx.h) }
+          ? { ...toMm({ x: k.rectPx.x, y: k.rectPx.y }), w: lenMm(k.rectPx.w), h: lenMm(k.rectPx.h) }
           : k.shape === "circle" && k.circlePx
-            ? { cx: round2p(k.circlePx.center.x), cy: round2p(k.circlePx.center.y), r: round2p(k.circlePx.radiusPx) }
+            ? { c: toMm(k.circlePx.center), r: lenMm(k.circlePx.radiusPx) }
             : k.shape === "polygon" && k.polygonPx
-              ? { poly: k.polygonPx.map(roundPoint) }
+              ? { poly: k.polygonPx.map(toMm) }
               : null,
     })),
     mount: {
@@ -146,6 +164,30 @@ export function generationParams(project: Project): Record<string, unknown> {
   };
 }
 
+/** Canonical generation key (hash) for the current model, or null when un-generatable. */
+export function generationKey(project: Project): string | null {
+  const params = generationParams(project);
+  if (params == null) return null;
+  return shortHash(JSON.stringify(params));
+}
+
+/**
+ * Whether the stored generation matches the CURRENT semantic model. Freshness is
+ * recomputed here — a persisted flag is never trusted as authority.
+ */
+export function isGenerationCurrent(project: Project): boolean {
+  const gen = project.generated;
+  if (!gen) return false;
+  const key = generationKey(project);
+  return key != null && key === gen.key;
+}
+
+/** True when the CURRENT model (by key) has an export record — not just "any export". */
+export function isCurrentModelExported(project: Project): boolean {
+  const key = generationKey(project);
+  return key != null && project.exports.some((e) => e.generationKey === key);
+}
+
 function numOrNull(v: Val<number> | undefined): number | null {
   if (!v) return null;
   const m = maybe(v);
@@ -154,9 +196,6 @@ function numOrNull(v: Val<number> | undefined): number | null {
 function round4(n: number): number {
   return Math.round(n * 1e4) / 1e4;
 }
-function round2p(n: number): number {
-  return Math.round(n * 100) / 100;
-}
 function roundPoint(p: Point): Point {
-  return { x: round2p(p.x), y: round2p(p.y) };
+  return { x: round4(p.x), y: round4(p.y) };
 }

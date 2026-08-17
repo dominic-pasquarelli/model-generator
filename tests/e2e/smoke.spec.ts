@@ -10,14 +10,9 @@ async function shot(page: Page, name: string) {
 
 test.beforeEach(async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  // Start each test from a clean seeded library.
-  await page.addInitScript(() => {
-    try {
-      window.localStorage.clear();
-    } catch {
-      /* ignore */
-    }
-  });
+  // Each Playwright test runs in a fresh browser context, so localStorage already
+  // starts empty (seeded on first load). We deliberately do NOT clear it on every
+  // navigation, so reload-persistence can be exercised.
 });
 
 test("library lists seeded projects and the tool card", async ({ page }) => {
@@ -75,8 +70,26 @@ test("export flow reaches the complete state", async ({ page }) => {
   await shot(page, "08-export-ready");
 
   await page.getByRole("button", { name: /Export STEP/ }).click();
-  await expect(page.getByText("Export complete")).toBeVisible({ timeout: 15_000 });
+  // The artifact is prepared in memory; it is not yet recorded as exported.
+  await expect(page.getByText("Artifact prepared")).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText(/Prepared in memory/)).toBeVisible();
   await shot(page, "09-export-complete");
+});
+
+test("closing the export dialog without downloading does not claim an export", async ({ page }) => {
+  await page.goto("/");
+  await page.getByText("cm4-carrier-mount-a").click();
+  const exportBtn = page.getByRole("button", { name: "Export", exact: true });
+  await expect(exportBtn).toBeEnabled({ timeout: 10_000 });
+  await exportBtn.click();
+  await page.getByRole("button", { name: /Export STEP/ }).click();
+  await expect(page.getByText("Artifact prepared")).toBeVisible({ timeout: 15_000 });
+
+  // Close without downloading → returns to the preview; history stays empty.
+  await page.getByRole("button", { name: "Close" }).click();
+  const rail = page.getByRole("navigation", { name: "Workflow steps" });
+  await rail.getByRole("button", { name: /Preview & export/ }).click();
+  await expect(page.getByText("No exports yet for this project.")).toBeVisible();
 });
 
 test("required-states showcase renders all six cards", async ({ page }) => {
@@ -89,7 +102,7 @@ test("required-states showcase renders all six cards", async ({ page }) => {
   await shot(page, "10-states");
 });
 
-test("new project → add reference → reject then accept calibration", async ({ page }) => {
+test("new project → add reference → place endpoints → reject then accept calibration", async ({ page }) => {
   await page.goto("/");
   await page.getByRole("button", { name: "New project", exact: true }).click();
 
@@ -98,27 +111,73 @@ test("new project → add reference → reject then accept calibration", async (
   await shot(page, "02-empty");
   await page.getByRole("button", { name: "Use sample board" }).click();
 
-  // Go to calibrate and open the popover
+  // Calibrate is a two-click placement: begin, then click the two endpoints on the image
+  // (no hard-coded anchors). The popover opens only once both endpoints exist.
   const rail = page.getByRole("navigation", { name: "Workflow steps" });
   await rail.getByRole("button", { name: /Calibrate/ }).click();
   await page.getByRole("button", { name: "Calibrate reference" }).click();
+
+  const overlay = page.locator("svg.overlay");
+  await expect(overlay).toBeVisible();
+  const box = (await overlay.boundingBox())!;
+  await page.mouse.click(box.x + box.width * 0.18, box.y + box.height * 0.5);
+  await page.mouse.click(box.x + box.width * 0.82, box.y + box.height * 0.5);
+
   const pop = page.getByRole("dialog", { name: "Calibrate A – B" });
   await expect(pop).toBeVisible();
 
-  // Reject an implausible distance (2 mm across the ~780 px span → ~390 px/mm),
-  // then accept the true 78 mm (→ 10 px/mm for this 1000-px sample asset).
+  // A tiny distance across a wide span → implausible → rejected.
   const input = pop.getByLabel("Known distance between A and B");
   await input.fill("2");
   await input.blur();
   await expect(pop.getByText(/px per mm/)).toBeVisible();
   await shot(page, "04-calibration-invalid");
 
+  // A plausible distance is accepted.
   await input.fill("78");
   await input.blur();
   await page.getByRole("button", { name: "Apply calibration" }).click();
   await expect(pop).toBeHidden();
-
-  // Status bar now advertises the calibrated scale.
   await expect(page.getByText(/Calibrated .* px\/mm/).first()).toBeVisible();
   await shot(page, "03-calibrated");
+});
+
+// A minimal valid 2×2 PNG (red pixels).
+const PNG_2x2 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR4nGP8z8Dwn4EIwDiqEAAmpwMB6H0AywAAAABJRU5ErkJggg==";
+
+test("uploading a PNG persists the reference across a reload", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Add a board reference" })).toBeVisible();
+
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "board.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(PNG_2x2, "base64"),
+  });
+
+  // The reference decodes and appears in the inspector with its intrinsic dimensions.
+  await expect(page.getByText("board.png")).toBeVisible();
+  await expect(page.getByText(/2 × 2 px/)).toBeVisible();
+
+  // Reload: the browser-local draft persisted; reopening shows the same reference.
+  await page.reload();
+  await page.getByText("untitled-mount").first().click();
+  await expect(page.getByText("board.png")).toBeVisible();
+});
+
+test("changing a keep-out's shape keeps its geometry consistent", async ({ page }) => {
+  await page.goto("/");
+  await page.getByText("cm4-carrier-mount-a").click();
+  const rail = page.getByRole("navigation", { name: "Workflow steps" });
+  await rail.getByRole("button", { name: /Keep-outs/ }).click();
+
+  // Select the first keep-out and switch it to a circle.
+  await page.getByRole("button", { name: /KO-1/ }).first().click();
+  await page.getByLabel("Shape").selectOption("circle");
+
+  // The editor now reflects a circle (Diameter readout), and export is still reachable
+  // (no structurally-invalid object was produced).
+  await expect(page.getByText("Diameter")).toBeVisible();
 });

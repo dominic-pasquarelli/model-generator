@@ -4,46 +4,45 @@ import { Icon } from "@/icons/Icon";
 import { Button } from "@/components/ui/Button";
 import { useStore } from "@/state/store";
 
+const ACCEPT = "image/png,image/jpeg,image/svg+xml";
+
 /**
  * Empty designer drop zone. A reference is a picture, not a measurement — the note
- * makes the honesty rule explicit. Uploading reads the file locally (FileReader) and
- * never leaves the device.
+ * makes the honesty rule explicit. Uploading reads the file locally (FileReader),
+ * routes the reference through the store's canonical transaction (so it persists and
+ * failures surface), and decodes intrinsic dimensions. Errors are reported, not swallowed.
  */
 export function EmptyState() {
   const addSampleReference = useStore((s) => s.addSampleReference);
+  const importReference = useStore((s) => s.importReference);
   const [dragOver, setDragOver] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const onFiles = (files: FileList | null) => {
+    setError(null);
     if (!files || files.length === 0) return;
-    // A real local upload path: read the image, measure its intrinsic px, keep it local.
     const file = files[0];
+    if (!/^image\/(png|jpeg|svg\+xml)$/.test(file.type)) {
+      setError(`Unsupported file type "${file.type || file.name}". Use a PNG, JPEG, or SVG image.`);
+      return;
+    }
     const reader = new FileReader();
+    reader.onerror = () => setError("Could not read the file. Try another image.");
     reader.onload = () => {
       const src = String(reader.result);
       const img = new Image();
       img.onload = () => {
-        useStore.getState().current &&
-          useStore.setState((s) => {
-            const current = s.current!;
-            const next = {
-              ...current,
-              reference: {
-                id: `ref_${Math.random().toString(36).slice(2, 10)}`,
-                assetName: file.name,
-                src,
-                widthPx: img.naturalWidth || 1000,
-                heightPx: img.naturalHeight || 660,
-                rotationDeg: 0,
-                capture: { label: "Uploaded image — kept local", kind: "photo" as const },
-                addedAt: Date.now(),
-              },
-              version: current.version + 1,
-              updatedAt: Date.now(),
-            };
-            return { current: next, projects: s.projects.map((p) => (p.id === next.id ? next : p)) };
-          });
+        const w = img.naturalWidth;
+        const h = img.naturalHeight;
+        if (!w || !h) {
+          setError("The image reported no intrinsic dimensions; it can't be calibrated.");
+          return;
+        }
+        const res = importReference({ assetName: file.name, src, widthPx: w, heightPx: h, captureLabel: "Uploaded image — kept local" });
+        if (!res.ok) setError(`Reference added but not saved: ${res.error ?? "storage error"}.`);
       };
+      img.onerror = () => setError("This image could not be decoded (PDFs and unsupported formats can't be rasterised here).");
       img.src = src;
     };
     reader.readAsDataURL(file);
@@ -66,7 +65,7 @@ export function EmptyState() {
       <input
         ref={fileInput}
         type="file"
-        accept="image/png,image/jpeg,image/svg+xml,application/pdf"
+        accept={ACCEPT}
         style={{ display: "none" }}
         onChange={(e) => onFiles(e.target.files)}
       />
@@ -87,7 +86,15 @@ export function EmptyState() {
           Use sample board
         </Button>
       </div>
-      <div className="ehint">PNG · JPEG · SVG · PDF drawing</div>
+      <div className="ehint">PNG · JPEG · SVG</div>
+      {error ? (
+        <div
+          role="alert"
+          style={{ marginTop: 12, fontSize: 11.5, color: "#ffb4a8", background: "#43231f", border: "1px solid #7a3830", borderRadius: 8, padding: "8px 10px", textAlign: "left" }}
+        >
+          {error}
+        </div>
+      ) : null}
       <div className="enote">
         <Icon name="info" />
         <div>

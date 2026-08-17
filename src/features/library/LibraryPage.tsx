@@ -62,6 +62,7 @@ function NewProjectCard() {
 
 export function LibraryPage() {
   const projects = useStore((s) => s.projects);
+  const savedBoards = useStore((s) => s.savedBoards);
   const newProject = useStore((s) => s.newProject);
   const goStates = useStore((s) => s.goStates);
 
@@ -81,12 +82,12 @@ export function LibraryPage() {
           <div className="pagehead">
             <div>
               <h1>Projects</h1>
-              <div className="sub">
-                Files in <span className="mono">~/ModelGenerator/projects</span> · saved on this device
-              </div>
+              <div className="sub">Browser-local drafts on this device</div>
             </div>
             <div className="actions">
-              <Button icon="folder">Open project…</Button>
+              <Button icon="folder" disabled title="Opening project files is planned — persistence is browser-local for now">
+                Open project…
+              </Button>
               <Button icon="plus" variant="primary" onClick={() => newProject()}>
                 New project
               </Button>
@@ -149,11 +150,35 @@ export function LibraryPage() {
             </div>
           </div>
 
+          {savedBoards.length > 0 ? (
+            <>
+              <div className="sechead">
+                <h2>Saved board definitions</h2>
+                <div className="sub">Reusable across mount strategies · stored in this browser</div>
+              </div>
+              <div className="tcards" style={{ gridTemplateColumns: "repeat(4, 1fr)" }}>
+                {savedBoards.map((b) => (
+                  <div key={b.id} className="tcard" style={{ display: "block" }}>
+                    <div className="tname">
+                      <Icon name="board" /> {b.name || "Untitled board"}
+                      {b.revision ? <Chip tone="neutral">{b.revision}</Chip> : null}
+                    </div>
+                    <div className="tdesc">
+                      {b.board.holes.length} hole{b.board.holes.length === 1 ? "" : "s"} · {b.board.keepOuts.length} keep-out
+                      {b.board.keepOuts.length === 1 ? "" : "s"}
+                      {b.calibration?.status === "valid" ? " · calibrated" : ""}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : null}
+
           <div className="localstrip">
             <Icon name="lock" />
             <div>
-              <b>Local-first.</b> Projects are ordinary files on this device. No account, sync, or upload is required to
-              design and export.
+              <b>Local-first.</b> Projects are drafts stored in this browser (no server, account, sync, or upload).
+              Durable project files are a planned step.
             </div>
           </div>
         </div>

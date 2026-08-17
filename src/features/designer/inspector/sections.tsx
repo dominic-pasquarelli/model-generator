@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/Button";
 import { Chip, StateChip } from "@/components/ui/Chip";
 import { Field, NumberField, SegmentedControl, SelectField, TextInput } from "@/components/ui/fields";
 import type { FastenerChoice, KeepOut, MountingHole, Project } from "@/core/project/types";
-import { boardFrame, holeMm, outlineDims, rectMm } from "@/core/project/derive";
+import { boardFrame, holeMm, isGenerationCurrent, outlineDims, rectMm } from "@/core/project/derive";
 import { isKnown, maybe } from "@/core/project/value";
 import { fmt } from "@/lib/format";
 import { boardMmToImage, useStore } from "@/state/store";
@@ -24,7 +24,8 @@ function stateToChip(state: MountingHole["state"], missing: boolean) {
 }
 
 export function ProjectSection({ project }: { project: Project }) {
-  const setUnits = useStore((s) => s.setUnits);
+  // Units are millimetres only for now: every inspector input and readout means mm.
+  // The inch option is deferred until conversion is wired end-to-end (see NEXT.md).
   return (
     <InspectorSection icon="folder" title="Project">
       <div className="fgrid">
@@ -33,16 +34,10 @@ export function ProjectSection({ project }: { project: Project }) {
             <span className="val">{project.name}</span>
           </div>
         </Field>
-        <Field label="Units">
-          <SegmentedControl
-            ariaLabel="Units"
-            value={project.units}
-            options={[
-              { value: "mm", label: "mm" },
-              { value: "inch", label: "inch" },
-            ]}
-            onChange={setUnits}
-          />
+        <Field label="Units" help="inch — planned">
+          <div className="control">
+            <span className="val">mm</span>
+          </div>
         </Field>
         <Field label="Schema">
           <div className="control is-select">
@@ -332,11 +327,22 @@ export function HolesSection({ project }: { project: Project }) {
   );
 }
 
+function keepOutSizeLabel(project: Project, ko: KeepOut): string {
+  if (ko.shape === "rect" && ko.rectPx) {
+    const d = rectMm(project, ko.rectPx);
+    return d ? `${fmt(d.w)} × ${fmt(d.h)}` : "—";
+  }
+  if (ko.shape === "circle" && ko.circlePx) {
+    const d = rectMm(project, { x: 0, y: 0, w: ko.circlePx.radiusPx * 2, h: 0 });
+    return d ? `⌀ ${fmt(d.w)}` : "—";
+  }
+  if (ko.shape === "polygon" && ko.polygonPx) return `${ko.polygonPx.length} vertices`;
+  return "—";
+}
+
 function KeepOutEditor({ project, ko }: { project: Project; ko: KeepOut }) {
   const updateKeepOut = useStore((s) => s.updateKeepOut);
   const deleteKeepOut = useStore((s) => s.deleteKeepOut);
-  const box = ko.rectPx;
-  const dimMm = box ? rectMm(project, box) : null;
   return (
     <InspectorSection title={`Selected — ${ko.label}`}>
       <div className="fgrid">
@@ -363,10 +369,10 @@ function KeepOutEditor({ project, ko }: { project: Project; ko: KeepOut }) {
             onChange={(boardSide) => updateKeepOut(ko.id, { boardSide })}
           />
         </Field>
-        <Field label="W × H">
+        <Field label={ko.shape === "circle" ? "Diameter" : ko.shape === "polygon" ? "Vertices" : "W × H"}>
           <div className="control">
-            <span className="val num">{dimMm ? `${fmt(dimMm.w)} × ${fmt(dimMm.h)}` : "—"}</span>
-            <span className="unit">mm</span>
+            <span className="val num">{keepOutSizeLabel(project, ko)}</span>
+            {ko.shape !== "polygon" ? <span className="unit">mm</span> : null}
           </div>
         </Field>
         <NumberField
@@ -534,14 +540,28 @@ export function MountSection({ project }: { project: Project }) {
         </div>
       </InspectorSection>
 
-      <InspectorSection icon="cube-flat" title="Generation" right={gen?.upToDate ? <StateChip state="generated" label="Up to date" /> : gen ? <Chip tone="neutral">Stale</Chip> : undefined}>
+      <InspectorSection
+        icon="cube-flat"
+        title="Generation"
+        right={
+          gen && isGenerationCurrent(project) ? (
+            <StateChip state="generated" label="Up to date" />
+          ) : gen ? (
+            <Chip tone="neutral">Stale</Chip>
+          ) : undefined
+        }
+      >
         {gen ? (
           <>
             <div style={{ fontSize: 11, color: "var(--text-3)" }}>
-              Params <span className="mono">{gen.paramsHash.slice(0, 6)}…{gen.paramsHash.slice(-4)}</span> · project v{gen.sourceVersion} · {(gen.durationMs / 1000).toFixed(1)} s
+              Params <span className="mono">{gen.paramsHash.slice(0, 6)}…{gen.paramsHash.slice(-4)}</span> · project v
+              {gen.sourceVersion}
+              {gen.durationMs != null ? ` · ${(gen.durationMs / 1000).toFixed(1)} s` : ""}
             </div>
             <div className="fhelp" style={{ marginTop: 6 }}>
-              Preview and export consume this same generated result.
+              {isGenerationCurrent(project)
+                ? "Preview and export consume this same generated result."
+                : "The model changed since this was generated — regenerate before exporting."}
             </div>
           </>
         ) : (

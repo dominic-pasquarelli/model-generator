@@ -36,13 +36,47 @@ export interface NumberFieldProps {
   help?: ReactNode;
   helpError?: boolean;
   min?: number;
+  max?: number;
   ariaLabel?: string;
 }
 
+export interface CommitDecision {
+  /** Whether onCommit should fire (false = revert / no change). */
+  commit: boolean;
+  /** The value to commit (rounded to `decimals`, clamped to [min,max]), or null. */
+  value: number | null;
+}
+
 /**
- * Numeric control. Clearing the field commits `null` (unknown) — never 0. Placing a
- * value visually and typing it are the same act; the stored value is exactly what is
- * shown. Commits on blur and Enter.
+ * Pure decision for what a NumberField commit should do. Guarantees:
+ * - empty input → null, but only a *change* commits (already-null stays no-op);
+ * - non-finite text → no commit (revert);
+ * - finite value is rounded to `decimals` so the stored value equals the displayed one;
+ * - min/max are clamped;
+ * - a value equal to the current one does not commit (no spurious version bump).
+ */
+export function resolveCommit(
+  raw: string,
+  current: number | null,
+  decimals: number,
+  min?: number,
+  max?: number,
+): CommitDecision {
+  const trimmed = raw.trim();
+  if (trimmed === "") return { commit: current !== null, value: null };
+  const n = Number(trimmed);
+  if (!Number.isFinite(n)) return { commit: false, value: current };
+  let rounded = Number(n.toFixed(decimals));
+  if (min != null && rounded < min) rounded = min;
+  if (max != null && rounded > max) rounded = max;
+  if (current != null && rounded === current) return { commit: false, value: current };
+  return { commit: true, value: rounded };
+}
+
+/**
+ * Numeric control. Clearing the field commits `null` (unknown) — never 0. The stored
+ * value is exactly what is shown (rounded to `decimals`). Enter and blur each commit
+ * exactly once; Escape reverts without committing.
  */
 export function NumberField({
   label,
@@ -56,31 +90,30 @@ export function NumberField({
   help,
   helpError,
   min,
+  max,
   ariaLabel,
 }: NumberFieldProps) {
-  const [buffer, setBuffer] = useState<string>(value == null ? "" : value.toFixed(decimals));
+  const display = (v: number | null) => (v == null ? "" : v.toFixed(decimals));
+  const [buffer, setBuffer] = useState<string>(display(value));
   const [focused, setFocused] = useState(false);
   const skipCommit = useRef(false);
   const id = useId();
 
   useEffect(() => {
-    if (!focused) setBuffer(value == null ? "" : value.toFixed(decimals));
+    if (!focused) setBuffer(display(value));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [value, decimals, focused]);
 
   const commit = () => {
     // Escape reverts without committing — its blur must not persist the edited text.
     if (skipCommit.current) {
       skipCommit.current = false;
+      setBuffer(display(value));
       return;
     }
-    const trimmed = buffer.trim();
-    if (trimmed === "") {
-      onCommit(null);
-      return;
-    }
-    const n = Number(trimmed);
-    if (Number.isFinite(n)) onCommit(n);
-    else setBuffer(value == null ? "" : value.toFixed(decimals));
+    const decision = resolveCommit(buffer, value, decimals, min, max);
+    if (decision.commit) onCommit(decision.value);
+    else setBuffer(display(value)); // revert display to the canonical value
   };
 
   const control = (
@@ -93,7 +126,6 @@ export function NumberField({
         aria-invalid={invalid || undefined}
         value={buffer}
         placeholder={placeholder}
-        min={min}
         onFocus={() => setFocused(true)}
         onBlur={() => {
           setFocused(false);
@@ -102,12 +134,11 @@ export function NumberField({
         onChange={(e) => setBuffer(e.target.value)}
         onKeyDown={(e) => {
           if (e.key === "Enter") {
-            commit();
+            // Blur triggers the single commit path (onBlur → commit) — do not commit here too.
             (e.target as HTMLInputElement).blur();
           }
           if (e.key === "Escape") {
             skipCommit.current = true;
-            setBuffer(value == null ? "" : value.toFixed(decimals));
             (e.target as HTMLInputElement).blur();
           }
         }}

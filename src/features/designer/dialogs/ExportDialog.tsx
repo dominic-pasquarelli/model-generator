@@ -19,6 +19,7 @@ export function ExportDialog({ project }: { project: Project }) {
   const runExport = useStore((s) => s.runExport);
   const cancelExport = useStore((s) => s.cancelExport);
   const retryExport = useStore((s) => s.retryExport);
+  const commitExportDownload = useStore((s) => s.commitExportDownload);
   const setStep = useStore((s) => s.setStep);
 
   // Closing the export dialog returns the user to the synchronized preview.
@@ -73,7 +74,11 @@ export function ExportDialog({ project }: { project: Project }) {
         width={520}
         footer={
           <>
-            <Button size="sm" variant="ghost">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => void navigator.clipboard?.writeText(`${ex.errorCode ?? ""}\n${ex.errorDetail ?? ""}`.trim())}
+            >
               Copy report
             </Button>
             <Spacer />
@@ -106,9 +111,9 @@ export function ExportDialog({ project }: { project: Project }) {
       <Dialog
         open
         onClose={dismiss}
-        title="Export complete"
+        title="Artifact prepared"
         icon="check"
-        headRight={<Chip tone="neutral">Exported</Chip>}
+        headRight={<Chip tone="neutral">Prepared</Chip>}
         width={520}
         footer={
           <>
@@ -116,12 +121,24 @@ export function ExportDialog({ project }: { project: Project }) {
               Close
             </Button>
             <Spacer />
-            <Button size="sm" variant="primary" icon="export" onClick={() => downloadArtifact(ex.artifact!)}>
+            <Button
+              size="sm"
+              variant="primary"
+              icon="export"
+              onClick={() => {
+                // Record the export in history ONLY when the download is actually initiated.
+                commitExportDownload();
+                downloadArtifact(ex.artifact!);
+              }}
+            >
               Download files
             </Button>
           </>
         }
       >
+        <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 6 }}>
+          Prepared in memory. Download to write the files — nothing is recorded as exported until you do.
+        </div>
         <FileBox
           icon="file"
           name={ex.artifact.fileName}

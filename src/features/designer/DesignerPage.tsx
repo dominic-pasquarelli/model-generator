@@ -31,7 +31,7 @@ export function DesignerPage() {
 
   const right = (
     <>
-      <SaveStateIndicator savedAt={project.updatedAt} />
+      <SaveStateIndicator />
       <div className="vdiv" />
       <IconButton icon="undo" label="Undo" disabled />
       <IconButton icon="redo" label="Redo" disabled />

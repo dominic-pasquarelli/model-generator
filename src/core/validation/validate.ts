@@ -6,8 +6,8 @@
  */
 import { bbox, rectIntersectsCircle, circlesOverlap, type Point } from "@/core/geom";
 import type { KeepOut, Project } from "@/core/project/types";
-import { standoffSeatRadiusPx } from "@/core/project/derive";
-import { isKnown } from "@/core/project/value";
+import { isGenerationCurrent, outlineDims, standoffSeatRadiusPx } from "@/core/project/derive";
+import { isKnown, type Val } from "@/core/project/value";
 
 export type Severity = "error" | "warning" | "info";
 
@@ -140,18 +140,38 @@ export function validateProject(project: Project): Validation[] {
   });
 
   // ---- Outline ----
+  const dims = outlineDims(project);
   if (!board.outline || board.outline.vertices.length < 3) {
     out.push({
       id: "no-outline",
-      severity: board.holes.length > 0 ? "warning" : "info",
+      severity: "error",
       title: "Board outline not defined",
-      body: "Trace the board edge so the generator has a plate boundary to build on.",
+      body: "Trace the board edge so the generator has a plate boundary to build on. Generation and export stay blocked until it exists.",
       fix: { label: "Draw outline", target: { step: "outline" } },
+      relatesTo: { step: "outline" },
+    });
+  } else if (dims && (dims.widthMm <= 0 || dims.heightMm <= 0)) {
+    out.push({
+      id: "outline-degenerate",
+      severity: "error",
+      title: "Board outline is degenerate",
+      body: "The outline has zero width or height. Re-trace it so it encloses a real area.",
+      fix: { label: "Redraw outline", target: { step: "outline" } },
       relatesTo: { step: "outline" },
     });
   }
 
   // ---- Holes ----
+  if (board.outline && board.holes.length === 0) {
+    out.push({
+      id: "no-holes",
+      severity: "error",
+      title: "No mounting holes",
+      body: "The mount strategy needs at least one mounting hole to place a standoff.",
+      fix: { label: "Add a hole", target: { step: "holes" } },
+      relatesTo: { step: "holes" },
+    });
+  }
   for (const h of board.holes) {
     if (!isKnown(h.diameterMm)) {
       out.push({
@@ -160,6 +180,15 @@ export function validateProject(project: Project): Validation[] {
         title: `${h.label} has no diameter`,
         body: "The generator can't size its standoff or screw hole. Enter the drill or screw size to unblock generation.",
         fix: { label: "Enter ⌀", target: { step: "holes", holeId: h.id, field: "diameterMm" } },
+        relatesTo: { step: "holes", holeId: h.id },
+      });
+    } else if (!(h.diameterMm.value > 0)) {
+      out.push({
+        id: `hole-bad-diameter-${h.id}`,
+        severity: "error",
+        title: `${h.label} diameter must be positive`,
+        body: "A zero or negative diameter can't size a standoff or screw hole.",
+        fix: { label: "Fix ⌀", target: { step: "holes", holeId: h.id, field: "diameterMm" } },
         relatesTo: { step: "holes", holeId: h.id },
       });
     }
@@ -181,6 +210,27 @@ export function validateProject(project: Project): Validation[] {
   const seat = standoffSeatRadiusPx(project);
   const outlineBox = board.outline ? bbox(board.outline.vertices) : null;
   for (const k of board.keepOuts) {
+    const shapeError = keepOutShapeError(k);
+    if (shapeError) {
+      out.push({
+        id: `keepout-shape-${k.id}`,
+        severity: "error",
+        title: `${k.label} has invalid ${k.shape} geometry`,
+        body: shapeError,
+        fix: { label: "Fix keep-out", target: { step: "keepouts", keepOutId: k.id } },
+        relatesTo: { step: "keepouts", keepOutId: k.id },
+      });
+    }
+    if (isKnown(k.clearanceHeightMm) && k.clearanceHeightMm.value < 0) {
+      out.push({
+        id: `keepout-clearance-${k.id}`,
+        severity: "error",
+        title: `${k.label} clearance is negative`,
+        body: "A clearance height cannot be negative.",
+        fix: { label: "Fix clearance", target: { step: "keepouts", keepOutId: k.id } },
+        relatesTo: { step: "keepouts", keepOutId: k.id },
+      });
+    }
     for (const h of board.holes) {
       if (seat != null && keepOutHitsCircle(k, h.centerPx, seat)) {
         out.push({
@@ -204,24 +254,28 @@ export function validateProject(project: Project): Validation[] {
     }
   }
 
-  // ---- Mount height inputs (unknown must not become zero) ----
-  if (!isKnown(project.mount.standoffHeightMm)) {
+  // ---- Mount dimensions (unknown must not become zero; known must be positive) ----
+  requirePositive(out, project.mount.standoffHeightMm, {
+    id: "mount-standoff",
+    label: "Standoff height",
+    body: "The bracket height is base + standoff.",
+    step: "mount",
+    field: "standoffHeightMm",
+  });
+  requirePositive(out, project.mount.baseThicknessMm, {
+    id: "mount-base",
+    label: "Base thickness",
+    body: "The bracket height is base + standoff.",
+    step: "mount",
+    field: "baseThicknessMm",
+  });
+  if (isKnown(project.mount.bossDiameterMm) && !(project.mount.bossDiameterMm.value > 0)) {
     out.push({
-      id: "mount-standoff-unknown",
+      id: "mount-boss-nonpositive",
       severity: "error",
-      title: "Standoff height not set",
-      body: "The bracket height is base + standoff. Enter the standoff height, or the mount can't be generated.",
-      fix: { label: "Set standoff", target: { step: "mount", field: "standoffHeightMm" } },
-      relatesTo: { step: "mount" },
-    });
-  }
-  if (!isKnown(project.mount.baseThicknessMm)) {
-    out.push({
-      id: "mount-base-unknown",
-      severity: "error",
-      title: "Base thickness not set",
-      body: "The bracket height is base + standoff. Enter the base thickness, or the mount can't be generated.",
-      fix: { label: "Set base", target: { step: "mount", field: "baseThicknessMm" } },
+      title: "Boss diameter must be positive",
+      body: "A zero or negative boss diameter can't form a standoff seat.",
+      fix: { label: "Fix boss ⌀", target: { step: "mount", field: "bossDiameterMm" } },
       relatesTo: { step: "mount" },
     });
   }
@@ -235,6 +289,32 @@ export function validateProject(project: Project): Validation[] {
       body: "Standoff seating and clearance depend on it. Enter the measured board thickness.",
       fix: { label: "Enter thickness", target: { step: "measurements", field: "thicknessMm" } },
       relatesTo: { step: "measurements" },
+    });
+  } else if (!(board.thicknessMm.value > 0)) {
+    out.push({
+      id: "thickness-nonpositive",
+      severity: "error",
+      title: "Board thickness must be positive",
+      body: "A zero or negative board thickness is not physical.",
+      fix: { label: "Fix thickness", target: { step: "measurements", field: "thicknessMm" } },
+      relatesTo: { step: "measurements" },
+    });
+  }
+
+  // ---- Generation freshness (proven, not trusted) ----
+  // Once the model is generatable, require a CURRENT generation before export. This is
+  // recomputed from the model, so a persisted flag can never mark a stale model current.
+  const generatable = summarize(out).errors === 0;
+  if (generatable && !isGenerationCurrent(project)) {
+    out.push({
+      id: "generation-stale",
+      severity: "error",
+      title: project.generated ? "Generated model is out of date" : "Mount not generated yet",
+      body: project.generated
+        ? "The bracket was generated from an earlier version of the model. Regenerate before exporting."
+        : "Generate the bracket from the current model before exporting.",
+      fix: { label: "Regenerate", target: { step: "mount" } },
+      relatesTo: { step: "mount" },
     });
   }
 
@@ -291,6 +371,51 @@ function keepOutExceeds(k: KeepOut, outlineBox: { x: number; y: number; w: numbe
   );
 }
 
+function requirePositive(
+  out: Validation[],
+  val: Val<number>,
+  opts: { id: string; label: string; body: string; step: StepId; field: string },
+): void {
+  if (!isKnown(val)) {
+    out.push({
+      id: `${opts.id}-unknown`,
+      severity: "error",
+      title: `${opts.label} not set`,
+      body: `${opts.body} Enter ${opts.label.toLowerCase()}, or the mount can't be generated.`,
+      fix: { label: `Set ${opts.label.toLowerCase()}`, target: { step: opts.step, field: opts.field } },
+      relatesTo: { step: opts.step },
+    });
+  } else if (!(val.value > 0)) {
+    out.push({
+      id: `${opts.id}-nonpositive`,
+      severity: "error",
+      title: `${opts.label} must be positive`,
+      body: `A zero or negative ${opts.label.toLowerCase()} is not valid.`,
+      fix: { label: `Fix ${opts.label.toLowerCase()}`, target: { step: opts.step, field: opts.field } },
+      relatesTo: { step: opts.step },
+    });
+  }
+}
+
+/** Structural validity of a keep-out's shape-specific payload; null when valid. */
+function keepOutShapeError(k: KeepOut): string | null {
+  if (k.shape === "rect") {
+    if (!k.rectPx) return "Rectangle geometry is missing.";
+    if (!(k.rectPx.w > 0) || !(k.rectPx.h > 0)) return "Rectangle width and height must be positive.";
+    return null;
+  }
+  if (k.shape === "circle") {
+    if (!k.circlePx) return "Circle geometry is missing.";
+    if (!(k.circlePx.radiusPx > 0)) return "Circle radius must be positive.";
+    return null;
+  }
+  if (k.shape === "polygon") {
+    if (!k.polygonPx || k.polygonPx.length < 3) return "A polygon needs at least three vertices.";
+    return null;
+  }
+  return null;
+}
+
 function calibrationSourceLabel(source: string): string {
   switch (source) {
     case "calipers":
@@ -314,20 +439,25 @@ export interface ExportReadiness {
   checklist: string[];
 }
 
-/** Export writes only trustworthy geometry: no errors, calibrated, and a generation exists. */
+/**
+ * Export writes only trustworthy geometry: zero blocking errors AND a generation that
+ * is CURRENT for the present model (recomputed, not a trusted flag). Because missing
+ * outline/holes and a stale/absent generation are themselves blocking errors,
+ * `blockers` is never empty while `ready` is false.
+ */
 export function exportReadiness(project: Project, items = validateProject(project)): ExportReadiness {
   const blockers = blockingErrors(items);
   const isCalibrated =
     !!project.calibration && project.calibration.status === "valid" && project.calibration.pxPerMm != null;
-  const hasGeneration = !!project.generated && project.generated.upToDate;
+  const generationCurrent = isGenerationCurrent(project);
   const checklist: string[] = [];
   if (isCalibrated) checklist.push(`Calibrated ${project.calibration!.pxPerMm!.toFixed(1)} px/mm`);
   if (project.board.outline?.confirmed)
     checklist.push(`Outline and ${project.board.holes.length} holes captured`);
-  if (isKnown(project.board.thicknessMm))
+  if (isKnown(project.board.thicknessMm) && project.board.thicknessMm.value > 0)
     checklist.push(`Board thickness measured · ${project.board.thicknessMm.value.toFixed(2)} mm`);
-  if (hasGeneration) {
-    const clips = project.generated!.warnings.length;
+  if (generationCurrent && project.generated) {
+    const clips = project.generated.warnings.length;
     checklist.push(
       clips === 0
         ? "Generated bracket avoids all keep-outs"
@@ -336,5 +466,5 @@ export function exportReadiness(project: Project, items = validateProject(projec
   }
   const summary = summarize(items);
   checklist.push(`${summary.errors} errors · ${summary.warnings} warnings · model v${project.version}`);
-  return { ready: blockers.length === 0 && isCalibrated && hasGeneration, blockers, checklist };
+  return { ready: blockers.length === 0 && isCalibrated && generationCurrent, blockers, checklist };
 }

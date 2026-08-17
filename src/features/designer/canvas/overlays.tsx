@@ -199,19 +199,17 @@ function OutlineMark({ vertices, selected, k }: { vertices: Point[]; selected: b
   );
 }
 
-function CalibrationMark({ project, k }: { project: Project; k: number }) {
-  const cal = project.calibration;
-  if (!cal) return null;
-  const [a, b] = cal.anchors;
-  const bad = cal.status === "invalid";
-  const color = bad ? C.calibBad : C.calib;
-  const px = Math.round(Math.hypot(b.x - a.x, b.y - a.y) * (project.reference ? project.reference.widthPx / 1000 : 1));
-  void px;
-  const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+/** Amber calibration endpoints (A, B) with a connecting line + px readout when both placed. */
+function CalibrationMark({ anchors, invalid, k }: { anchors: Point[]; invalid: boolean; k: number }) {
+  if (anchors.length === 0) return null;
+  const color = invalid ? C.calibBad : C.calib;
+  const [a, b] = anchors;
+  const dist = anchors.length >= 2 ? Math.round(Math.hypot(b.x - a.x, b.y - a.y)) : null;
+  const mid = anchors.length >= 2 ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : null;
   return (
     <g>
-      <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={color} strokeWidth={3.5 * k} />
-      {[a, b].map((p, i) => (
+      {anchors.length >= 2 ? <line x1={a.x} y1={a.y} x2={b.x} y2={b.y} stroke={color} strokeWidth={3.5 * k} /> : null}
+      {anchors.map((p, i) => (
         <g key={i}>
           <line x1={p.x} y1={p.y - 25 * k} x2={p.x} y2={p.y + 25 * k} stroke={color} strokeWidth={2 * k} />
           <circle cx={p.x} cy={p.y} r={13 * k} fill="none" stroke={color} strokeWidth={2.5 * k} />
@@ -224,19 +222,15 @@ function CalibrationMark({ project, k }: { project: Project; k: number }) {
             fontSize={20 * k}
             fontWeight={650}
             fontFamily="Inter Variable, Inter, sans-serif"
-            fill={bad ? "#2b0d0a" : "#231a02"}
+            fill={invalid ? "#2b0d0a" : "#231a02"}
           >
             {i === 0 ? "A" : "B"}
           </text>
         </g>
       ))}
-      <LabelPill
-        x={mid.x - 72 * k}
-        y={mid.y + 10 * k}
-        text={bad ? `${Math.round(Math.hypot(b.x - a.x, b.y - a.y))} px ✗` : `${Math.round(Math.hypot(b.x - a.x, b.y - a.y))} px`}
-        kind={bad ? "missing" : "neutral"}
-        k={k}
-      />
+      {mid && dist != null ? (
+        <LabelPill x={mid.x - 72 * k} y={mid.y + 10 * k} text={invalid ? `${dist} px ✗` : `${dist} px`} kind={invalid ? "missing" : "neutral"} k={k} />
+      ) : null}
     </g>
   );
 }
@@ -266,6 +260,7 @@ export function OverlayMarks({
   activeStep,
   interactive,
   draftRect,
+  calibDraft,
 }: {
   project: Project;
   selection: Selection;
@@ -273,11 +268,14 @@ export function OverlayMarks({
   activeStep: StepId;
   interactive: boolean;
   draftRect: Rect | null;
+  calibDraft: Point[];
 }) {
   const k = project.reference ? project.reference.widthPx / 1000 : 1;
   const conflicts = conflictHoleIds(project);
   const outline = project.board.outline;
-  const showCalib = activeStep === "calibrate" && !!project.calibration;
+  // On the calibrate step, show the anchors being placed (draft), else the committed ones.
+  const calibAnchors = activeStep === "calibrate" ? (calibDraft.length > 0 ? calibDraft : (project.calibration?.anchors ?? [])) : [];
+  const calibInvalid = project.calibration?.status === "invalid" && calibDraft.length === 0;
 
   return (
     <>
@@ -308,7 +306,7 @@ export function OverlayMarks({
         />
       ))}
 
-      {showCalib ? <CalibrationMark project={project} k={k} /> : null}
+      {calibAnchors.length > 0 ? <CalibrationMark anchors={calibAnchors} invalid={calibInvalid} k={k} /> : null}
 
       {draftRect ? (
         <rect

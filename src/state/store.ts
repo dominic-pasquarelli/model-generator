@@ -5,9 +5,9 @@
  * and autosaves — so preview/export always reflect the latest semantic model.
  */
 import { create } from "zustand";
-import type { Point } from "@/core/geom";
+import type { Point, Rect } from "@/core/geom";
 import { bbox, normalizeRect } from "@/core/geom";
-import { boardFrame, boardMmToPxPoint } from "@/core/project/derive";
+import { boardFrame, boardMmToPxPoint, generationKey, isGenerationCurrent } from "@/core/project/derive";
 import { createSeedLibrary } from "@/core/project/fixtures";
 import { createProject, parseProjectFile } from "@/core/project/schema";
 import type {
@@ -25,10 +25,19 @@ import { confirm, isKnown, measured, typeMeasured, unknownVal, type Val } from "
 import { assessCalibration } from "@/core/units/units";
 import type { Unit } from "@/core/units/units";
 import type { StepId } from "@/core/validation/validate";
-import { exportReadiness } from "@/core/validation/validate";
+import { blockingErrors, validateProject } from "@/core/validation/validate";
 import { mockGenerator } from "@/core/geometry/mockGenerator";
+import type { GeometryAdapter } from "@/core/geometry/adapter";
 import { buildExport, type ExportArtifact } from "@/core/export/exporter";
 import { uid } from "@/lib/id";
+
+// The active geometry adapter. A test seam lets a delayed adapter be injected to
+// exercise generation superseding without touching production behavior.
+let activeGenerator: GeometryAdapter = mockGenerator;
+/** @internal test-only: swap the adapter (pass nothing to reset to the mock). */
+export function __setGeneratorForTest(gen?: GeometryAdapter) {
+  activeGenerator = gen ?? mockGenerator;
+}
 
 export type Theme = "light" | "dark";
 export type Route = { view: "library" } | { view: "designer"; projectId: string } | { view: "states" };
@@ -64,11 +73,17 @@ export interface DesignerUi {
   view3d: "iso" | "top" | "front" | "fit";
   autoGenerate: boolean;
   calibrationOpen: boolean;
+  /** In-progress calibration anchors placed by clicking on the reference (0, 1 or 2). */
+  calibDraft: Point[];
   export: ExportUiState;
 }
 
-const STORAGE_KEY = "mg.projects";
+export const STORAGE_KEY = "mg.projects";
+export const RECOVERY_KEY = "mg.projects.recovery";
+export const BOARDS_KEY = "mg.boards";
 const THEME_KEY = "mg.theme";
+
+export type SaveState = "idle" | "saved" | "error";
 
 const THEME_MEDIA = typeof window !== "undefined" && window.matchMedia;
 
@@ -92,7 +107,17 @@ function applyTheme(theme: Theme) {
   }
 }
 
-function loadLibrary(): Project[] {
+/** Preserve corrupt raw storage under a recovery key so it is never silently lost. */
+function stashRecovery(raw: string) {
+  try {
+    // Keep only the latest corrupt snapshot; enough to hand-recover from.
+    localStorage.setItem(RECOVERY_KEY, raw);
+  } catch {
+    /* nothing more we can do */
+  }
+}
+
+export function loadLibrary(): Project[] {
   let raw: string | null = null;
   try {
     raw = localStorage.getItem(STORAGE_KEY);
@@ -106,27 +131,68 @@ function loadLibrary(): Project[] {
   try {
     arr = JSON.parse(raw);
   } catch {
+    // Malformed whole-library JSON: preserve it, then start from seeds rather than
+    // overwriting the corrupt data on the next save.
+    stashRecovery(raw);
     return createSeedLibrary();
   }
-  if (!Array.isArray(arr)) return createSeedLibrary();
+  if (!Array.isArray(arr)) {
+    stashRecovery(raw);
+    return createSeedLibrary();
+  }
   // Parse each project independently: one corrupt entry must not discard the rest.
   // Omitting the top-level schemaVersion lets each project's own version drive migration.
   const out: Project[] = [];
+  const dropped: unknown[] = [];
   for (const p of arr) {
     try {
       out.push(parseProjectFile(JSON.stringify({ project: p })).project);
     } catch {
-      /* skip a single corrupt project; keep the survivors */
+      dropped.push(p); // quarantine the corrupt entry instead of losing it
     }
   }
+  if (dropped.length > 0) stashRecovery(JSON.stringify(dropped));
   return out;
 }
 
-function persistLibrary(projects: Project[]) {
+export interface PersistResult {
+  ok: boolean;
+  error?: string;
+}
+
+function errorName(e: unknown): string {
+  // DOMException is not always instanceof Error (e.g. jsdom), so read `name` directly.
+  if (e && typeof e === "object" && "name" in e) return String((e as { name: unknown }).name);
+  return "StorageError";
+}
+
+function persistLibrary(projects: Project[]): PersistResult {
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(projects));
+    return { ok: true };
+  } catch (e) {
+    const name = errorName(e);
+    return { ok: false, error: name === "QuotaExceededError" ? "Storage is full" : `Save failed (${name})` };
+  }
+}
+
+export function loadSavedBoards(): SavedBoardDefinition[] {
+  try {
+    const raw = localStorage.getItem(BOARDS_KEY);
+    if (!raw) return [];
+    const arr = JSON.parse(raw);
+    return Array.isArray(arr) ? (arr as SavedBoardDefinition[]) : [];
   } catch {
-    /* storage may be unavailable; local session still works */
+    return [];
+  }
+}
+
+function persistSavedBoards(boards: SavedBoardDefinition[]): PersistResult {
+  try {
+    localStorage.setItem(BOARDS_KEY, JSON.stringify(boards));
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: errorName(e) };
   }
 }
 
@@ -154,6 +220,7 @@ function freshDesignerUi(project: Project): DesignerUi {
     view3d: "iso",
     autoGenerate: true,
     calibrationOpen: false,
+    calibDraft: [],
     export: freshExportUi(),
   };
 }
@@ -174,10 +241,51 @@ const TOOL_FOR_STEP: Partial<Record<StepId, ToolId>> = {
 };
 
 let exportTimer: ReturnType<typeof setTimeout> | null = null;
+// Monotonic token so a newer generation supersedes an older in-flight one.
+let generationSeq = 0;
 function stopExportTimer() {
   if (exportTimer) {
     clearTimeout(exportTimer);
     exportTimer = null;
+  }
+}
+
+/** Bounding box (px) of a keep-out regardless of its current shape. */
+function keepOutBBox(k: KeepOut): Rect | null {
+  if (k.shape === "rect" && k.rectPx) return k.rectPx;
+  if (k.shape === "circle" && k.circlePx)
+    return {
+      x: k.circlePx.center.x - k.circlePx.radiusPx,
+      y: k.circlePx.center.y - k.circlePx.radiusPx,
+      w: k.circlePx.radiusPx * 2,
+      h: k.circlePx.radiusPx * 2,
+    };
+  if (k.shape === "polygon" && k.polygonPx && k.polygonPx.length >= 1) return bbox(k.polygonPx);
+  return null;
+}
+
+/**
+ * Change a keep-out's shape AND materialise the corresponding geometry from its
+ * current bounding box, clearing the old payload — so the discriminator and the
+ * populated field never disagree (which would let validation/generation skip it).
+ */
+function convertKeepOutShape(k: KeepOut, shape: KeepOutShape) {
+  const box = keepOutBBox(k) ?? { x: 0, y: 0, w: 40, h: 24 };
+  k.shape = shape;
+  delete k.rectPx;
+  delete k.circlePx;
+  delete k.polygonPx;
+  if (shape === "rect") {
+    k.rectPx = box;
+  } else if (shape === "circle") {
+    k.circlePx = { center: { x: box.x + box.w / 2, y: box.y + box.h / 2 }, radiusPx: Math.max(1, Math.min(box.w, box.h) / 2) };
+  } else {
+    k.polygonPx = [
+      { x: box.x, y: box.y },
+      { x: box.x + box.w, y: box.y },
+      { x: box.x + box.w, y: box.y + box.h },
+      { x: box.x, y: box.y + box.h },
+    ];
   }
 }
 
@@ -200,6 +308,10 @@ export interface AppState {
   current: Project | null;
   ui: DesignerUi;
   savedBoards: SavedBoardDefinition[];
+  /** Explicit persistence state — "saved" only after a confirmed successful write. */
+  saveState: SaveState;
+  lastSavedAt: number | null;
+  lastSaveError: string | null;
   /** Live cursor position in image-pixel space (status-bar readout only). */
   cursor: Point | null;
   setCursor: (p: Point | null) => void;
@@ -226,10 +338,13 @@ export interface AppState {
   setBoardRevision: (rev: string) => void;
   setThicknessMm: (mm: number | null) => void;
   addSampleReference: () => void;
+  importReference: (ref: ReferenceInput) => PersistResult;
   markReferenceMissing: (missing: boolean) => void;
+  beginCalibration: () => void;
+  placeCalibAnchor: (p: Point) => void;
   openCalibration: () => void;
   closeCalibration: () => void;
-  applyCalibration: (knownMm: number, source: CalibrationSourceKind) => boolean;
+  applyCalibration: (knownMm: number, source: CalibrationSourceKind) => { ok: boolean; message?: string };
   setSampleOutline: () => void;
   setOutlineRect: (a: Point, b: Point) => void;
   addHoleAt: (centerImg: Point) => void;
@@ -253,9 +368,20 @@ export interface AppState {
   runExport: () => void;
   cancelExport: () => void;
   retryExport: () => void;
+  /** Record the export in history — ONLY after the browser download is initiated. */
+  commitExportDownload: () => void;
 
   // persistence
-  saveBoardToLibrary: () => void;
+  saveBoardToLibrary: () => PersistResult;
+}
+
+export interface ReferenceInput {
+  assetName: string;
+  src: string;
+  widthPx: number;
+  heightPx: number;
+  rotationDeg?: number;
+  captureLabel?: string;
 }
 
 export interface MountPatch {
@@ -280,20 +406,34 @@ export const useStore = create<AppState>((set, get) => {
   const theme = loadTheme();
   applyTheme(theme);
   const projects = loadLibrary();
+  const savedBoards = loadSavedBoards();
 
-  /** Commit a model change: clone, mutate, bump version, mark generation stale, autosave. */
-  function mutate(mutator: (p: Project) => void) {
+  /** Persist and set an explicit save state. "saved" only follows a confirmed write. */
+  function commit(projectsNext: Project[], patch: Partial<AppState> = {}) {
+    const res = persistLibrary(projectsNext);
+    set({
+      projects: projectsNext,
+      ...patch,
+      saveState: res.ok ? "saved" : "error",
+      lastSaveError: res.ok ? null : res.error ?? "Save failed",
+      ...(res.ok ? { lastSavedAt: Date.now() } : {}),
+    } as Partial<AppState>);
+    return res;
+  }
+
+  /** Commit a model change: clone, mutate, bump version, autosave. Freshness of any
+   *  prior generation is recomputed from the model (its key), never a stored flag. */
+  function mutate(mutator: (p: Project) => void): PersistResult {
     const current = get().current;
-    if (!current) return;
+    if (!current) return { ok: false, error: "No open project" };
     const next = structuredClone(current) as Project;
     mutator(next);
     next.version += 1;
     next.updatedAt = Date.now();
-    if (next.generated) next.generated = { ...next.generated, upToDate: false };
     const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
-    persistLibrary(projectsNext);
-    set({ current: next, projects: projectsNext });
+    const res = commit(projectsNext, { current: next });
     if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
+    return res;
   }
 
   function nextLabel(prefix: string, existing: { label: string }[]): string {
@@ -316,7 +456,10 @@ export const useStore = create<AppState>((set, get) => {
     projects,
     current: null,
     ui: freshDesignerUi(createProject()),
-    savedBoards: [],
+    savedBoards,
+    saveState: "idle",
+    lastSavedAt: null,
+    lastSaveError: null,
     cursor: null,
     setCursor: (p) => set({ cursor: p }),
 
@@ -347,9 +490,7 @@ export const useStore = create<AppState>((set, get) => {
       stopExportTimer();
       const project = createProject({ name });
       const projectsNext = [project, ...get().projects];
-      persistLibrary(projectsNext);
-      set({
-        projects: projectsNext,
+      commit(projectsNext, {
         current: project,
         route: { view: "designer", projectId: project.id },
         ui: freshDesignerUi(project),
@@ -386,43 +527,84 @@ export const useStore = create<AppState>((set, get) => {
         };
       }),
 
+    importReference: (ref) =>
+      mutate((p) => {
+        p.reference = {
+          id: uid("ref"),
+          assetName: ref.assetName,
+          src: ref.src,
+          widthPx: ref.widthPx,
+          heightPx: ref.heightPx,
+          rotationDeg: ref.rotationDeg ?? 0,
+          capture: { label: ref.captureLabel ?? "Uploaded image — kept local", kind: "photo" },
+          addedAt: Date.now(),
+        };
+        // A new reference invalidates any calibration measured against the old image.
+        p.calibration = null;
+      }),
+
     markReferenceMissing: (missing) =>
       mutate((p) => {
         if (p.reference) p.reference.missing = missing;
       }),
 
-    openCalibration: () => set((s) => ({ ui: { ...s.ui, calibrationOpen: true, activeTool: "calibrate" } })),
+    beginCalibration: () =>
+      set((s) => ({ ui: { ...s.ui, activeTool: "calibrate", calibDraft: [], calibrationOpen: false } })),
+
+    placeCalibAnchor: (pt) =>
+      set((s) => {
+        const draft = s.ui.calibDraft.length >= 2 ? [pt] : [...s.ui.calibDraft, pt];
+        // Two anchors placed → open the popover to enter the known distance.
+        return { ui: { ...s.ui, calibDraft: draft, calibrationOpen: draft.length === 2 } };
+      }),
+
+    // Editing an existing calibration seeds the draft from its anchors; a reference with
+    // no calibration must have its two endpoints placed on the image first.
+    openCalibration: () =>
+      set((s) => {
+        const anchors = s.current?.calibration?.anchors;
+        if (anchors) return { ui: { ...s.ui, calibrationOpen: true, activeTool: "calibrate", calibDraft: [...anchors] } };
+        return { ui: { ...s.ui, activeTool: "calibrate", calibDraft: [], calibrationOpen: false } };
+      }),
     closeCalibration: () => set((s) => ({ ui: { ...s.ui, calibrationOpen: false } })),
 
     applyCalibration: (knownMm, source) => {
       const current = get().current;
-      if (!current || !current.reference) return false;
-      // Default anchors at the sample's top mounting holes; a full editor lets the
-      // user drag these. Rejected calibrations never overwrite a prior valid one.
+      if (!current || !current.reference) return { ok: false, message: "No reference image." };
+      const draft = get().ui.calibDraft;
+      if (draft.length < 2) return { ok: false, message: "Place both calibration endpoints on the image first." };
+      const anchors: [Point, Point] = [draft[0], draft[1]];
       const existing = current.calibration;
-      const anchors: [Point, Point] = existing?.anchors ?? [
-        { x: 110, y: 85 },
-        { x: 890, y: 85 },
-      ];
+
+      // Anchors must be finite and inside the reference-image bounds — millimetres come
+      // only from trusted endpoints, so out-of-bounds or non-finite points are rejected.
+      const w = current.reference.widthPx;
+      const h = current.reference.heightPx;
+      const inBounds = (pt: Point) =>
+        Number.isFinite(pt.x) && Number.isFinite(pt.y) && pt.x >= 0 && pt.y >= 0 && pt.x <= w && pt.y <= h;
+      if (!inBounds(anchors[0]) || !inBounds(anchors[1])) {
+        return { ok: false, message: "A calibration endpoint is outside the image. Place both anchors on the board." };
+      }
+
       const assessment = assessCalibration(anchors[0], anchors[1], knownMm);
       if (!assessment.valid) {
-        // Keep a prior *valid* calibration untouched — and do not bump version /
-        // invalidate the generation on a pure no-op. Only record a fresh rejection.
-        if (existing && existing.status === "valid") return false;
-        mutate((p) => {
-          p.calibration = {
-            id: existing?.id ?? uid("cal"),
-            anchors,
-            knownMm: measured(knownMm, source),
-            source,
-            pxPerMm: null,
-            status: "invalid",
-            ...(assessment.reason ? { rejectReason: assessment.reason } : {}),
-            ...(assessment.message ? { rejectMessage: assessment.message } : {}),
-            createdAt: Date.now(),
-          };
-        });
-        return false;
+        // Keep a prior *valid* calibration untouched; only record a fresh rejection.
+        if (!(existing && existing.status === "valid")) {
+          mutate((p) => {
+            p.calibration = {
+              id: existing?.id ?? uid("cal"),
+              anchors,
+              knownMm: measured(knownMm, source),
+              source,
+              pxPerMm: null,
+              status: "invalid",
+              ...(assessment.reason ? { rejectReason: assessment.reason } : {}),
+              ...(assessment.message ? { rejectMessage: assessment.message } : {}),
+              createdAt: Date.now(),
+            };
+          });
+        }
+        return { ok: false, ...(assessment.message ? { message: assessment.message } : {}) };
       }
       mutate((p) => {
         p.calibration = {
@@ -436,7 +618,7 @@ export const useStore = create<AppState>((set, get) => {
         };
       });
       set((s) => ({ ui: { ...s.ui, calibrationOpen: false } }));
-      return true;
+      return { ok: true };
     },
 
     setSampleOutline: () =>
@@ -552,7 +734,7 @@ export const useStore = create<AppState>((set, get) => {
         if (!k) return;
         if (patch.purpose !== undefined) k.purpose = patch.purpose;
         if (patch.boardSide) k.boardSide = patch.boardSide as BoardSide;
-        if (patch.shape) k.shape = patch.shape as KeepOutShape;
+        if (patch.shape && patch.shape !== k.shape) convertKeepOutShape(k, patch.shape as KeepOutShape);
         if (patch.state) k.state = patch.state;
         if ("clearanceHeightMm" in patch)
           k.clearanceHeightMm = valFromInput(patch.clearanceHeightMm ?? null, k.clearanceHeightMm);
@@ -581,25 +763,30 @@ export const useStore = create<AppState>((set, get) => {
     generate: async () => {
       const current = get().current;
       if (!current) return;
-      const result = await mockGenerator.generate(current);
+      const seq = ++generationSeq;
+      const result = await activeGenerator.generate(current);
+      // Superseded by a newer generation, or the user switched projects → discard.
+      if (seq !== generationSeq) return;
       const latest = get().current;
       if (!latest || latest.id !== current.id) return;
-      if (result.ok) {
-        const next = { ...latest, generated: result.model };
-        const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
-        persistLibrary(projectsNext);
-        set({ current: next, projects: projectsNext });
-      }
+      if (!result.ok) return;
+      // Accept the result ONLY if the current model still hashes to what was generated.
+      // An edit made during the (async) adapter run changes the key → the stale result
+      // is discarded and cannot become the project's generation.
+      if (generationKey(latest) !== result.model.key) return;
+      const next = { ...latest, generated: result.model };
+      const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
+      commit(projectsNext, { current: next });
     },
 
     ensureGenerated: () => {
       const current = get().current;
       if (!current) return;
-      const gen = current.generated;
-      const readiness = exportReadiness(current);
-      // Generate when we could, and don't have an up-to-date result.
-      const canGenerate = readiness.blockers.length === 0 && !!boardFrame(current) && current.board.holes.length > 0;
-      if (canGenerate && (!gen || !gen.upToDate)) void get().generate();
+      // "Can generate" ignores the freshness blocker itself; regenerate whenever the
+      // stored generation is not current for the present model.
+      const blockingExceptStale = blockingErrors(validateProject(current)).filter((b) => b.id !== "generation-stale");
+      const canGenerate = blockingExceptStale.length === 0 && !!boardFrame(current) && current.board.holes.length > 0;
+      if (canGenerate && !isGenerationCurrent(current)) void get().generate();
     },
 
     openExport: () => {
@@ -617,12 +804,9 @@ export const useStore = create<AppState>((set, get) => {
       const current = get().current;
       if (!current) return;
       const projectId = current.id; // finalize must apply to THIS project, not whatever is current later
-      const stages = [
-        "boolean: base plate",
-        "boolean: standoff 1 / 4",
-        "boolean: standoff 4 / 4",
-        "writing metadata sidecar",
-      ];
+      // Honest placeholder stages — no fake kernel boolean work, no fixed hole counts.
+      const stages = ["Validating current generation", "Preparing labelled placeholder artifact"];
+      if (get().ui.export.writeSidecar) stages.push("Preparing metadata sidecar");
       let i = 0;
       stopExportTimer();
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "progress", progress: 4, stage: stages[0] } } }));
@@ -639,10 +823,11 @@ export const useStore = create<AppState>((set, get) => {
           ui: { ...s.ui, export: { ...s.ui.export, progress, stage: stages[Math.min(i, stages.length - 1)] } },
         }));
         if (i < stages.length) {
-          exportTimer = setTimeout(tick, 420);
+          exportTimer = setTimeout(tick, 380);
           return;
         }
-        // Finalize.
+        // Finalize: prepare the artifact IN MEMORY only. No ExportRecord is written to
+        // project history until the user actually downloads (see commitExportDownload).
         const opts = { format: get().ui.export.format, writeSidecar: get().ui.export.writeSidecar };
         const built = buildExport(active, opts);
         if (!built.ok) {
@@ -659,16 +844,19 @@ export const useStore = create<AppState>((set, get) => {
           }));
           return;
         }
-        const next = { ...active, exports: [built.artifact.record, ...active.exports] };
-        const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
-        persistLibrary(projectsNext);
-        set((s) => ({
-          current: next,
-          projects: projectsNext,
-          ui: { ...s.ui, export: { ...s.ui.export, phase: "complete", progress: 100, artifact: built.artifact } },
-        }));
+        set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "complete", progress: 100, artifact: built.artifact } } }));
       };
-      exportTimer = setTimeout(tick, 420);
+      exportTimer = setTimeout(tick, 380);
+    },
+
+    commitExportDownload: () => {
+      const art = get().ui.export.artifact;
+      const current = get().current;
+      if (!art || !current) return;
+      if (current.exports.some((e) => e.id === art.record.id)) return; // already recorded
+      const next = { ...current, exports: [art.record, ...current.exports] };
+      const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
+      commit(projectsNext, { current: next });
     },
 
     cancelExport: () => {
@@ -680,7 +868,7 @@ export const useStore = create<AppState>((set, get) => {
 
     saveBoardToLibrary: () => {
       const current = get().current;
-      if (!current) return;
+      if (!current) return { ok: false, error: "No open project" };
       const def: SavedBoardDefinition = {
         id: uid("bdef"),
         name: current.board.name || current.name,
@@ -689,7 +877,10 @@ export const useStore = create<AppState>((set, get) => {
         board: structuredClone(current.board),
         calibration: current.calibration ? structuredClone(current.calibration) : null,
       };
-      set((s) => ({ savedBoards: [def, ...s.savedBoards] }));
+      const boardsNext = [def, ...get().savedBoards];
+      const res = persistSavedBoards(boardsNext);
+      set({ savedBoards: boardsNext });
+      return res;
     },
   };
 });

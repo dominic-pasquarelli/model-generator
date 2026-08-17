@@ -6,11 +6,10 @@
  * it with a kernel-backed adapter is the subject of GEOMETRY_GENERATION_PLAN.
  */
 import { bbox, rectIntersectsCircle, circlesOverlap, type Point } from "@/core/geom";
-import { boardFrame, generationParams, outlineDims, standoffSeatRadiusPx } from "@/core/project/derive";
+import { boardFrame, generationKey, outlineDims, standoffSeatRadiusPx } from "@/core/project/derive";
 import type { GeneratedDimensions, GeneratedModel, KeepOut, Project } from "@/core/project/types";
 import { maybe } from "@/core/project/value";
-import { shortHash } from "@/lib/id";
-import type { GenerateResult, GeometryAdapter } from "./adapter";
+import { ACTIVE_ADAPTER_VERSION, type GenerateResult, type GeometryAdapter } from "./adapter";
 
 const WALL_MM = 3; // Illustrative wall/margin around the board footprint.
 
@@ -30,9 +29,11 @@ function keepOutHitsCircle(k: KeepOut, center: Point, radiusPx: number): boolean
 export function computeDimensions(project: Project): GeneratedDimensions | null {
   const dims = outlineDims(project);
   if (!dims) return null;
+  if (dims.widthMm <= 0 || dims.heightMm <= 0) return null; // degenerate outline
   const base = maybe(project.mount.baseThicknessMm);
   const standoff = maybe(project.mount.standoffHeightMm);
   if (base == null || standoff == null) return null;
+  if (base <= 0 || standoff <= 0) return null; // non-positive height inputs are invalid, not zero
   const standoffCount = project.board.holes.length;
   const widthMm = Math.round(dims.widthMm + 2 * WALL_MM);
   const depthMm = Math.round(dims.heightMm + 2 * WALL_MM);
@@ -61,7 +62,7 @@ export function computeWarnings(project: Project): string[] {
 }
 
 export const mockGenerator: GeometryAdapter = {
-  name: "illustrative-mock",
+  name: ACTIVE_ADAPTER_VERSION,
   capabilities: { exactSolid: false, previewMesh: false },
   async generate(project: Project, signal?: AbortSignal): Promise<GenerateResult> {
     if (signal?.aborted) return { ok: false, error: { code: "ABORTED", message: "Generation cancelled." } };
@@ -98,16 +99,36 @@ export const mockGenerator: GeometryAdapter = {
         },
       };
     }
-    // The mount height is base + standoff; neither may be Unknown (unknown is never zero).
-    if (maybe(project.mount.standoffHeightMm) == null || maybe(project.mount.baseThicknessMm) == null) {
-      const feature = maybe(project.mount.standoffHeightMm) == null ? "standoff height" : "base thickness";
+    const badDiameter = project.board.holes.find((h) => {
+      const d = maybe(h.diameterMm);
+      return d != null && !(d > 0);
+    });
+    if (badDiameter) {
       return {
         ok: false,
         error: {
-          code: "MISSING_MOUNT_HEIGHT",
-          message: `Mount ${feature} is not set; the bracket height cannot be derived.`,
-          feature,
+          code: "INVALID_DIAMETER",
+          message: `${badDiameter.label} has a non-positive diameter.`,
+          feature: badDiameter.label,
         },
+      };
+    }
+    // The mount height is base + standoff; neither may be Unknown (unknown is never zero)
+    // nor non-positive.
+    const standoff = maybe(project.mount.standoffHeightMm);
+    const base = maybe(project.mount.baseThicknessMm);
+    if (standoff == null || base == null) {
+      const feature = standoff == null ? "standoff height" : "base thickness";
+      return {
+        ok: false,
+        error: { code: "MISSING_MOUNT_HEIGHT", message: `Mount ${feature} is not set; the bracket height cannot be derived.`, feature },
+      };
+    }
+    if (!(standoff > 0) || !(base > 0)) {
+      const feature = !(standoff > 0) ? "standoff height" : "base thickness";
+      return {
+        ok: false,
+        error: { code: "INVALID_MOUNT_HEIGHT", message: `Mount ${feature} must be greater than zero.`, feature },
       };
     }
 
@@ -116,15 +137,15 @@ export const mockGenerator: GeometryAdapter = {
       return { ok: false, error: { code: "NO_DIMENSIONS", message: "Outline produced no measurable footprint." } };
     }
 
-    const paramsHash = shortHash(JSON.stringify(generationParams(project)));
+    const key = generationKey(project); // non-null: frame + outline exist
     const model: GeneratedModel = {
       sourceVersion: project.version,
-      paramsHash,
+      key: key ?? "",
+      paramsHash: key ?? "",
       dims,
       warnings: computeWarnings(project),
       createdAt: Date.now(),
-      durationMs: 600,
-      upToDate: true,
+      durationMs: null, // the illustrative adapter does no real work to time
     };
     return { ok: true, model };
   },

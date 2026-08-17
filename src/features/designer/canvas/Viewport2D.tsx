@@ -24,6 +24,7 @@ export function Viewport2D({ project }: { project: Project }) {
   const addHoleAt = useStore((s) => s.addHoleAt);
   const addKeepOutRect = useStore((s) => s.addKeepOutRect);
   const setOutlineRect = useStore((s) => s.setOutlineRect);
+  const placeCalibAnchor = useStore((s) => s.placeCalibAnchor);
   const setCursor = useStore((s) => s.setCursor);
 
   const containerRef = useRef<HTMLDivElement>(null);
@@ -66,6 +67,11 @@ export function Viewport2D({ project }: { project: Project }) {
     if (tool === "hole") {
       const p = toImage(e.clientX, e.clientY);
       if (p) addHoleAt(p);
+      return;
+    }
+    if (tool === "calibrate") {
+      const p = toImage(e.clientX, e.clientY);
+      if (p) placeCalibAnchor(p);
       return;
     }
     if (tool === "keepout" || tool === "outline") {
@@ -198,6 +204,7 @@ export function Viewport2D({ project }: { project: Project }) {
               activeStep={ui.activeStep}
               interactive={ui.activeTool === "select"}
               draftRect={draft?.rect ?? null}
+              calibDraft={ui.calibDraft}
             />
           </svg>
         </div>

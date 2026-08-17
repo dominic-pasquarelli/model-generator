@@ -1,4 +1,5 @@
 import type { Project } from "@/core/project/types";
+import { isCurrentModelExported, isGenerationCurrent } from "@/core/project/derive";
 import { isKnown } from "@/core/project/value";
 import type { StepId, Validation } from "@/core/validation/validate";
 
@@ -69,9 +70,9 @@ function stepDone(id: StepId, p: Project): boolean {
     case "measurements":
       return isKnown(p.board.thicknessMm);
     case "mount":
-      return !!p.generated && p.generated.upToDate;
+      return isGenerationCurrent(p);
     case "export":
-      return p.exports.length > 0;
+      return isCurrentModelExported(p);
   }
 }
 

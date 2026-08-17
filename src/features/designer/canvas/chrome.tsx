@@ -46,11 +46,12 @@ const TOOL_STATUS_LABEL: Record<ToolId, string> = {
 export function CanvasToolbar({ project }: { project: Project }) {
   const activeTool = useStore((s) => s.ui.activeTool);
   const setTool = useStore((s) => s.setTool);
-  const openCalibration = useStore((s) => s.openCalibration);
+  const beginCalibration = useStore((s) => s.beginCalibration);
   const hasRef = !!project.reference;
 
   const pick = (id: ToolId) => {
-    if (id === "calibrate") openCalibration();
+    // Calibrate is a two-click placement: begin it, then the user clicks A and B.
+    if (id === "calibrate") beginCalibration();
     else setTool(id);
   };
 

@@ -57,6 +57,21 @@ describe("corrupt file handling", () => {
 
   it("throws when a required field is absent", () => {
     const bad = JSON.stringify({ schemaVersion: 1, project: { id: "x", name: "y" } });
-    expect(() => parseProjectFile(bad)).toThrow(/required field/);
+    expect(() => parseProjectFile(bad)).toThrow(MgFileError);
+  });
+
+  it("rejects a structurally malformed nested field (board: null)", () => {
+    const bad = JSON.stringify({
+      schemaVersion: 1,
+      project: { id: "x", name: "y", version: 1, schemaVersion: 1, exports: [], board: null, mount: {} },
+    });
+    expect(() => parseProjectFile(bad)).toThrow(/board/);
+  });
+
+  it("rejects a hole with no centerPx", () => {
+    const p = createProject({ name: "z" });
+    const raw = JSON.parse(serializeProject(p));
+    raw.project.board.holes = [{ id: "h", label: "H1", diameterMm: { known: false } }];
+    expect(() => parseProjectFile(JSON.stringify(raw))).toThrow(/centerPx/);
   });
 });

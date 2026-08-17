@@ -145,13 +145,19 @@ export interface GeneratedDimensions {
 export interface GeneratedModel {
   /** Project.version at generation time. */
   sourceVersion: number;
+  /**
+   * Canonical generation key — a hash of the complete geometry-affecting model in
+   * board-space millimetres plus the adapter version. Freshness is proven by
+   * recomputing this from the current model and comparing, NOT by a trusted flag.
+   */
+  key: string;
+  /** Short display form of `key` (the `a41c92…7f0e` label). */
   paramsHash: string;
   dims: GeneratedDimensions;
   warnings: string[];
   createdAt: number;
-  durationMs: number;
-  /** Whether this generation is still consistent with the current model. */
-  upToDate: boolean;
+  /** Measured elapsed time, or null when the illustrative adapter cannot measure it. */
+  durationMs: number | null;
 }
 
 export type ExportFormat = "step" | "stl";
@@ -162,6 +168,9 @@ export interface ExportRecord {
   fileName: string;
   sizeBytes: number;
   paramsHash: string;
+  /** Generation key of the model that was actually downloaded — lets the UI tell
+   *  "this project has an export in history" from "the CURRENT model was exported". */
+  generationKey: string;
   createdAt: number;
   wroteSidecar: boolean;
 }

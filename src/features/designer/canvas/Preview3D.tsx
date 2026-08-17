@@ -4,6 +4,7 @@ import { Icon } from "@/icons/Icon";
 import { Button } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
 import type { Project } from "@/core/project/types";
+import { isGenerationCurrent } from "@/core/project/derive";
 import { clock } from "@/lib/format";
 import { useStore, type DesignerUi } from "@/state/store";
 
@@ -88,7 +89,8 @@ export function Preview3D({ project }: { project: Project }) {
             <Chip tone="generated" icon="cube-flat">
               Generated
             </Chip>
-            {clock(gen.createdAt)} · {(gen.durationMs / 1000).toFixed(1)} s · deterministic{gen.upToDate ? "" : " · stale"}
+            {clock(gen.createdAt)} · {gen.durationMs != null ? `${(gen.durationMs / 1000).toFixed(1)} s · ` : ""}deterministic
+            {isGenerationCurrent(project) ? "" : " · stale"}
           </div>
           <div style={{ position: "absolute", left: 16, bottom: 16, display: "flex", gap: 8, zIndex: 16 }}>
             <Button variant="dark" size="sm" icon="undo" onClick={() => generate()}>
