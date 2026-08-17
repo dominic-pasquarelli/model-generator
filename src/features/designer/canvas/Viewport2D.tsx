@@ -120,14 +120,33 @@ export function Viewport2D({ project }: { project: Project }) {
     }
   };
 
-  // Keyboard: Escape cancels a draft; Delete removes selection.
+  // Keyboard: Escape cancels a draft; Delete/Backspace removes the current selection
+  // (unless the user is typing in a field).
+  const deleteHole = useStore((s) => s.deleteHole);
+  const deleteKeepOut = useStore((s) => s.deleteKeepOut);
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setDraft(null);
+      if (e.key === "Escape") {
+        setDraft(null);
+        return;
+      }
+      if (e.key === "Delete" || e.key === "Backspace") {
+        const target = e.target as HTMLElement | null;
+        const typing = target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable);
+        if (typing) return;
+        const sel = useStore.getState().ui.selection;
+        if (sel.kind === "hole") {
+          e.preventDefault();
+          deleteHole(sel.id);
+        } else if (sel.kind === "keepout") {
+          e.preventDefault();
+          deleteKeepOut(sel.id);
+        }
+      }
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, []);
+  }, [deleteHole, deleteKeepOut]);
 
   const cursor =
     ui.activeTool === "pan" ? "grab" : ui.activeTool === "select" ? "default" : "crosshair";

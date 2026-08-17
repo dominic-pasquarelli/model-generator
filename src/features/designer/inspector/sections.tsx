@@ -275,6 +275,7 @@ export function HolesSection({ project }: { project: Project }) {
   const select = useStore((s) => s.select);
   const selection = useStore((s) => s.ui.selection);
   const setTool = useStore((s) => s.setTool);
+  const addHoleAtCenter = useStore((s) => s.addHoleAtCenter);
   const frame = boardFrame(project);
   const holes = project.board.holes;
   const selected = selection.kind === "hole" ? holes.find((h) => h.id === selection.id) : undefined;
@@ -286,7 +287,16 @@ export function HolesSection({ project }: { project: Project }) {
         icon="hole"
         title={`Mounting holes · ${holes.length}`}
         right={
-          <Button size="sm" variant="ghost" style={{ height: 20, padding: "0 6px" }} onClick={() => setTool("hole")}>
+          <Button
+            size="sm"
+            variant="ghost"
+            style={{ height: 20, padding: "0 6px" }}
+            title="Add a hole at the board center (then set its diameter)"
+            onClick={() => {
+              setTool("hole");
+              addHoleAtCenter();
+            }}
+          >
             + Add
           </Button>
         }
@@ -385,6 +395,7 @@ export function KeepOutsSection({ project }: { project: Project }) {
   const select = useStore((s) => s.select);
   const selection = useStore((s) => s.ui.selection);
   const setTool = useStore((s) => s.setTool);
+  const addKeepOutCenter = useStore((s) => s.addKeepOutCenter);
   const kos = project.board.keepOuts;
   const selected = selection.kind === "keepout" ? kos.find((k) => k.id === selection.id) : undefined;
   return (
@@ -393,7 +404,16 @@ export function KeepOutsSection({ project }: { project: Project }) {
         icon="keepout"
         title={`Keep-outs · ${kos.length}`}
         right={
-          <Button size="sm" variant="ghost" style={{ height: 20, padding: "0 6px" }} onClick={() => setTool("keepout")}>
+          <Button
+            size="sm"
+            variant="ghost"
+            style={{ height: 20, padding: "0 6px" }}
+            title="Add a keep-out at the board center (then set its size and clearance)"
+            onClick={() => {
+              setTool("keepout");
+              addKeepOutCenter();
+            }}
+          >
             + Add
           </Button>
         }

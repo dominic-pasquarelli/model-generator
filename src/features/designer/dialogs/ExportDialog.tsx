@@ -225,14 +225,14 @@ export function ExportDialog({ project }: { project: Project }) {
           selected={ex.format === "step"}
           name="STEP"
           ext=".step"
-          desc="Solid CAD body — refine downstream in Fusion or other CAD."
+          desc="Target format for CAD refinement in Fusion. This build emits a STEP container placeholder — a real solid body awaits the geometry kernel."
           onSelect={() => setFormat("step")}
         />
         <RadioCard
           selected={ex.format === "stl"}
           name="STL"
           ext=".stl"
-          desc="Mesh only — print preview and diagnostics, not CAD refinement."
+          desc="Mesh format for print preview and diagnostics. This build emits a placeholder mesh, not a generated surface."
           onSelect={() => setFormat("stl")}
         />
       </div>

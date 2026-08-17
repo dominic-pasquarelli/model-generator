@@ -71,6 +71,19 @@ export function holeMm(hole: MountingHole, frame: BoardFrame | null): HoleMm {
   };
 }
 
+/**
+ * Radius (px) of a standoff seat around a hole, from the mount boss diameter.
+ * Returns null when there is no valid scale OR the boss diameter is unknown —
+ * callers must then SKIP seat/keep-out overlap reasoning rather than assume a size.
+ */
+export function standoffSeatRadiusPx(project: Project): number | null {
+  const cal = project.calibration;
+  if (!cal || cal.status !== "valid" || cal.pxPerMm == null) return null;
+  const boss = maybe(project.mount.bossDiameterMm);
+  if (boss == null) return null;
+  return (boss / 2) * cal.pxPerMm;
+}
+
 /** Pixel length → mm using the calibration scale only (no origin needed). */
 export function pxToMm(project: Project, pxLen: number): number | null {
   const cal = project.calibration;
@@ -93,8 +106,9 @@ export function generationParams(project: Project): Record<string, unknown> {
   const dims = outlineDims(project);
   const m = project.mount;
   return {
+    // `units` is display-only and never affects geometry, so it is deliberately
+    // excluded — a mm/inch toggle must not change the generated result's hash.
     schema: project.schemaVersion,
-    units: project.units,
     outline: dims ? { w: round4(dims.widthMm), h: round4(dims.heightMm), corners: dims.corners } : null,
     cornerRadius: numOrNull(project.board.outline?.cornerRadiusMm),
     thickness: numOrNull(project.board.thicknessMm),
@@ -108,6 +122,15 @@ export function generationParams(project: Project): Record<string, unknown> {
       shape: k.shape,
       side: k.boardSide,
       clearance: numOrNull(k.clearanceHeightMm),
+      // Keep-out geometry affects seat-clip warnings, so it must be in the hash.
+      geom:
+        k.shape === "rect" && k.rectPx
+          ? { x: round2p(k.rectPx.x), y: round2p(k.rectPx.y), w: round2p(k.rectPx.w), h: round2p(k.rectPx.h) }
+          : k.shape === "circle" && k.circlePx
+            ? { cx: round2p(k.circlePx.center.x), cy: round2p(k.circlePx.center.y), r: round2p(k.circlePx.radiusPx) }
+            : k.shape === "polygon" && k.polygonPx
+              ? { poly: k.polygonPx.map(roundPoint) }
+              : null,
     })),
     mount: {
       kind: m.kind,
@@ -131,6 +154,9 @@ function numOrNull(v: Val<number> | undefined): number | null {
 function round4(n: number): number {
   return Math.round(n * 1e4) / 1e4;
 }
+function round2p(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 function roundPoint(p: Point): Point {
-  return { x: Math.round(p.x * 100) / 100, y: Math.round(p.y * 100) / 100 };
+  return { x: round2p(p.x), y: round2p(p.y) };
 }

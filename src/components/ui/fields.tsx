@@ -60,6 +60,7 @@ export function NumberField({
 }: NumberFieldProps) {
   const [buffer, setBuffer] = useState<string>(value == null ? "" : value.toFixed(decimals));
   const [focused, setFocused] = useState(false);
+  const skipCommit = useRef(false);
   const id = useId();
 
   useEffect(() => {
@@ -67,6 +68,11 @@ export function NumberField({
   }, [value, decimals, focused]);
 
   const commit = () => {
+    // Escape reverts without committing — its blur must not persist the edited text.
+    if (skipCommit.current) {
+      skipCommit.current = false;
+      return;
+    }
     const trimmed = buffer.trim();
     if (trimmed === "") {
       onCommit(null);
@@ -100,6 +106,7 @@ export function NumberField({
             (e.target as HTMLInputElement).blur();
           }
           if (e.key === "Escape") {
+            skipCommit.current = true;
             setBuffer(value == null ? "" : value.toFixed(decimals));
             (e.target as HTMLInputElement).blur();
           }

@@ -6,7 +6,7 @@
  */
 import { create } from "zustand";
 import type { Point } from "@/core/geom";
-import { normalizeRect } from "@/core/geom";
+import { bbox, normalizeRect } from "@/core/geom";
 import { boardFrame, boardMmToPxPoint } from "@/core/project/derive";
 import { createSeedLibrary } from "@/core/project/fixtures";
 import { createProject, parseProjectFile } from "@/core/project/schema";
@@ -93,18 +93,33 @@ function applyTheme(theme: Theme) {
 }
 
 function loadLibrary(): Project[] {
+  let raw: string | null = null;
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
-    if (raw) {
-      const arr = JSON.parse(raw) as unknown[];
-      if (Array.isArray(arr) && arr.length) {
-        return arr.map((p) => parseProjectFile(JSON.stringify({ schemaVersion: 1, project: p })).project);
-      }
-    }
+    raw = localStorage.getItem(STORAGE_KEY);
   } catch {
-    /* fall through to seed */
+    return createSeedLibrary();
   }
-  return createSeedLibrary();
+  // Absent key → genuine first run; seed samples. A present-but-empty array is a
+  // deliberately cleared library and is respected (not re-seeded).
+  if (raw == null) return createSeedLibrary();
+  let arr: unknown;
+  try {
+    arr = JSON.parse(raw);
+  } catch {
+    return createSeedLibrary();
+  }
+  if (!Array.isArray(arr)) return createSeedLibrary();
+  // Parse each project independently: one corrupt entry must not discard the rest.
+  // Omitting the top-level schemaVersion lets each project's own version drive migration.
+  const out: Project[] = [];
+  for (const p of arr) {
+    try {
+      out.push(parseProjectFile(JSON.stringify({ project: p })).project);
+    } catch {
+      /* skip a single corrupt project; keep the survivors */
+    }
+  }
+  return out;
 }
 
 function persistLibrary(projects: Project[]) {
@@ -159,6 +174,24 @@ const TOOL_FOR_STEP: Partial<Record<StepId, ToolId>> = {
 };
 
 let exportTimer: ReturnType<typeof setTimeout> | null = null;
+function stopExportTimer() {
+  if (exportTimer) {
+    clearTimeout(exportTimer);
+    exportTimer = null;
+  }
+}
+
+/** Board-frame center (or image center) in image-pixel space, for keyboard "+ Add". */
+function projectCenterPx(project: Project): Point {
+  const outline = project.board.outline;
+  if (outline && outline.vertices.length >= 3) {
+    const box = bbox(outline.vertices);
+    return { x: box.x + box.w / 2, y: box.y + box.h / 2 };
+  }
+  const w = project.reference?.widthPx ?? 1000;
+  const h = project.reference?.heightPx ?? 660;
+  return { x: w / 2, y: h / 2 };
+}
 
 export interface AppState {
   theme: Theme;
@@ -200,6 +233,8 @@ export interface AppState {
   setSampleOutline: () => void;
   setOutlineRect: (a: Point, b: Point) => void;
   addHoleAt: (centerImg: Point) => void;
+  addHoleAtCenter: () => void;
+  addKeepOutCenter: () => void;
   updateHole: (id: string, patch: Partial<Pick<MountingHole, "fastener" | "state">> & { diameterMm?: number | null; center?: Point }) => void;
   confirmHole: (id: string) => void;
   deleteHole: (id: string) => void;
@@ -291,17 +326,25 @@ export const useStore = create<AppState>((set, get) => {
       set({ theme: t });
     },
 
-    goLibrary: () => set({ route: { view: "library" } }),
-    goStates: () => set({ route: { view: "states" } }),
+    goLibrary: () => {
+      stopExportTimer();
+      set({ route: { view: "library" } });
+    },
+    goStates: () => {
+      stopExportTimer();
+      set({ route: { view: "states" } });
+    },
 
     openProject: (id) => {
       const project = get().projects.find((p) => p.id === id);
       if (!project) return;
+      stopExportTimer();
       set({ current: project, route: { view: "designer", projectId: id }, ui: freshDesignerUi(project) });
       if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
     },
 
     newProject: (name) => {
+      stopExportTimer();
       const project = createProject({ name });
       const projectsNext = [project, ...get().projects];
       persistLibrary(projectsNext);
@@ -363,9 +406,10 @@ export const useStore = create<AppState>((set, get) => {
       ];
       const assessment = assessCalibration(anchors[0], anchors[1], knownMm);
       if (!assessment.valid) {
+        // Keep a prior *valid* calibration untouched — and do not bump version /
+        // invalidate the generation on a pure no-op. Only record a fresh rejection.
+        if (existing && existing.status === "valid") return false;
         mutate((p) => {
-          // Keep a prior *valid* calibration untouched; only record the rejection.
-          if (p.calibration && p.calibration.status === "valid") return;
           p.calibration = {
             id: existing?.id ?? uid("cal"),
             anchors,
@@ -439,6 +483,21 @@ export const useStore = create<AppState>((set, get) => {
       });
       const created = get().current?.board.holes.at(-1);
       if (created) get().select({ kind: "hole", id: created.id });
+    },
+
+    addHoleAtCenter: () => {
+      const p = get().current;
+      if (!p) return;
+      get().addHoleAt(projectCenterPx(p));
+    },
+
+    addKeepOutCenter: () => {
+      const p = get().current;
+      if (!p) return;
+      const c = projectCenterPx(p);
+      const w = (p.reference?.widthPx ?? 1000) * 0.12;
+      const h = w * 0.55;
+      get().addKeepOutRect({ x: c.x - w / 2, y: c.y - h / 2 }, { x: c.x + w / 2, y: c.y + h / 2 });
     },
 
     updateHole: (id, patch) =>
@@ -548,7 +607,7 @@ export const useStore = create<AppState>((set, get) => {
       set((s) => ({ ui: { ...s.ui, activeStep: "export", export: { ...freshExportUi(), open: true } } }));
     },
     closeExport: () => {
-      if (exportTimer) clearTimeout(exportTimer);
+      stopExportTimer();
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, open: false, phase: "idle", progress: 0 } } }));
     },
     setExportFormat: (format) => set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, format } } })),
@@ -557,6 +616,7 @@ export const useStore = create<AppState>((set, get) => {
     runExport: () => {
       const current = get().current;
       if (!current) return;
+      const projectId = current.id; // finalize must apply to THIS project, not whatever is current later
       const stages = [
         "boolean: base plate",
         "boolean: standoff 1 / 4",
@@ -564,8 +624,15 @@ export const useStore = create<AppState>((set, get) => {
         "writing metadata sidecar",
       ];
       let i = 0;
+      stopExportTimer();
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "progress", progress: 4, stage: stages[0] } } }));
       const tick = () => {
+        // Abort if the user navigated to a different project mid-export.
+        const active = get().current;
+        if (!active || active.id !== projectId) {
+          stopExportTimer();
+          return;
+        }
         i += 1;
         const progress = Math.min(96, Math.round((i / (stages.length + 1)) * 100));
         set((s) => ({
@@ -577,7 +644,7 @@ export const useStore = create<AppState>((set, get) => {
         }
         // Finalize.
         const opts = { format: get().ui.export.format, writeSidecar: get().ui.export.writeSidecar };
-        const built = buildExport(get().current!, opts);
+        const built = buildExport(active, opts);
         if (!built.ok) {
           set((s) => ({
             ui: {
@@ -592,7 +659,7 @@ export const useStore = create<AppState>((set, get) => {
           }));
           return;
         }
-        const next = { ...get().current!, exports: [built.artifact.record, ...get().current!.exports] };
+        const next = { ...active, exports: [built.artifact.record, ...active.exports] };
         const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
         persistLibrary(projectsNext);
         set((s) => ({
@@ -605,7 +672,7 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     cancelExport: () => {
-      if (exportTimer) clearTimeout(exportTimer);
+      stopExportTimer();
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "idle", progress: 0, stage: "" } } }));
     },
     retryExport: () =>

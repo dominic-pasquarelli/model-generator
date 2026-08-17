@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createProject } from "@/core/project/schema";
+import { createSampleProject } from "@/core/project/fixtures";
+import { mockGenerator } from "@/core/geometry/mockGenerator";
 import { measured, unknownVal } from "@/core/project/value";
 import type { Calibration, MountingHole } from "@/core/project/types";
 import { exportReadiness, summarize, validateProject } from "./validate";
@@ -131,5 +133,23 @@ describe("exportReadiness", () => {
   it("is not ready without a generation", () => {
     const p = createProject({ name: "x" });
     expect(exportReadiness(p).ready).toBe(false);
+  });
+
+  it("blocks with an error when the mount height inputs are unknown", () => {
+    const p = createSampleProject(1_000_000);
+    p.mount.standoffHeightMm = unknownVal<number>();
+    const v = validateProject(p);
+    expect(v.some((x) => x.id === "mount-standoff-unknown" && x.severity === "error")).toBe(true);
+    expect(exportReadiness(p, v).ready).toBe(false);
+  });
+
+  it("does not claim keep-out avoidance when a standoff seat is clipped", async () => {
+    const p = createSampleProject(1_000_000); // KO-3 clips S4
+    const gen = await mockGenerator.generate(p);
+    expect(gen.ok).toBe(true);
+    if (gen.ok) p.generated = gen.model;
+    const checklist = exportReadiness(p).checklist;
+    expect(checklist.some((c) => /clipped standoff seat/.test(c))).toBe(true);
+    expect(checklist.some((c) => /avoids all keep-outs/.test(c))).toBe(false);
   });
 });

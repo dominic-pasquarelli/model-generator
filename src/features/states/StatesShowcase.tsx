@@ -179,14 +179,15 @@ export function StatesShowcase() {
                 title="STEP export failed"
                 body={
                   <>
-                    The generated solid failed a validity check, so no file was written.
+                    Illustrative of how a future kernel would fail: a solid fails a validity check, so no file is
+                    written and the report names the cause.
                     <ErrorReportBox>
                       GEOM_BOOLEAN_NON_MANIFOLD
                       <br />
                       standoff S2 ∩ base plate · seam 0.002 mm
                     </ErrorReportBox>
-                    The canonical model is unchanged. This is diagnosable — the report names the failing feature and
-                    parameters instead of inventing geometry.
+                    The canonical model is unchanged. Errors are diagnosable — a named failing feature and parameters,
+                    never invented geometry. (No kernel is wired yet; this is the target behaviour.)
                   </>
                 }
                 foot={

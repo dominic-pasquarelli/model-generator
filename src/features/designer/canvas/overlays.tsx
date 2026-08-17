@@ -1,6 +1,7 @@
 import { bbox, rectIntersectsCircle, circlesOverlap, type Point, type Rect } from "@/core/geom";
 import type { KeepOut, MountingHole, Project } from "@/core/project/types";
 import { isKnown, maybe } from "@/core/project/value";
+import { standoffSeatRadiusPx } from "@/core/project/derive";
 import type { Selection } from "@/state/store";
 import type { StepId } from "@/core/validation/validate";
 
@@ -243,10 +244,8 @@ function CalibrationMark({ project, k }: { project: Project; k: number }) {
 /** Which holes conflict with a keep-out standoff seat (for conflict rings). */
 function conflictHoleIds(project: Project): Set<string> {
   const ids = new Set<string>();
-  const cal = project.calibration;
-  if (!cal || cal.status !== "valid" || cal.pxPerMm == null) return ids;
-  const boss = maybe(project.mount.bossDiameterMm) ?? 7;
-  const seat = (boss / 2) * cal.pxPerMm;
+  const seat = standoffSeatRadiusPx(project);
+  if (seat == null) return ids; // unknown boss diameter → no fabricated seat
   for (const h of project.board.holes) {
     for (const ko of project.board.keepOuts) {
       const box = keepBox(ko);

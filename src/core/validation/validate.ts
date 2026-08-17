@@ -6,8 +6,8 @@
  */
 import { bbox, rectIntersectsCircle, circlesOverlap, type Point } from "@/core/geom";
 import type { KeepOut, Project } from "@/core/project/types";
-import { boardFrame } from "@/core/project/derive";
-import { isKnown, maybe } from "@/core/project/value";
+import { standoffSeatRadiusPx } from "@/core/project/derive";
+import { isKnown } from "@/core/project/value";
 
 export type Severity = "error" | "warning" | "info";
 
@@ -54,12 +54,6 @@ export function summarize(items: Validation[]): ValidationSummary {
 
 export function blockingErrors(items: Validation[]): Validation[] {
   return items.filter((v) => v.severity === "error");
-}
-
-/** Standoff-seat radius (px) around a hole, from the mount boss diameter. */
-function seatRadiusPx(project: Project, pxPerMm: number): number {
-  const boss = maybe(project.mount.bossDiameterMm) ?? 7;
-  return (boss / 2) * pxPerMm;
 }
 
 function keepOutHitsCircle(k: KeepOut, center: Point, radiusPx: number): boolean {
@@ -182,12 +176,13 @@ export function validateProject(project: Project): Validation[] {
   }
 
   // ---- Keep-outs vs standoff seats ----
-  const frame = boardFrame(project);
-  const seat = seatRadiusPx(project, pxPerMm);
+  // Seat radius is null when the boss diameter is unknown → skip overlap reasoning
+  // rather than compute it against an assumed size.
+  const seat = standoffSeatRadiusPx(project);
   const outlineBox = board.outline ? bbox(board.outline.vertices) : null;
   for (const k of board.keepOuts) {
     for (const h of board.holes) {
-      if (keepOutHitsCircle(k, h.centerPx, seat)) {
+      if (seat != null && keepOutHitsCircle(k, h.centerPx, seat)) {
         out.push({
           id: `keepout-hits-${k.id}-${h.id}`,
           severity: "warning",
@@ -208,7 +203,28 @@ export function validateProject(project: Project): Validation[] {
       });
     }
   }
-  void frame; // reserved for future mm-space checks
+
+  // ---- Mount height inputs (unknown must not become zero) ----
+  if (!isKnown(project.mount.standoffHeightMm)) {
+    out.push({
+      id: "mount-standoff-unknown",
+      severity: "error",
+      title: "Standoff height not set",
+      body: "The bracket height is base + standoff. Enter the standoff height, or the mount can't be generated.",
+      fix: { label: "Set standoff", target: { step: "mount", field: "standoffHeightMm" } },
+      relatesTo: { step: "mount" },
+    });
+  }
+  if (!isKnown(project.mount.baseThicknessMm)) {
+    out.push({
+      id: "mount-base-unknown",
+      severity: "error",
+      title: "Base thickness not set",
+      body: "The bracket height is base + standoff. Enter the base thickness, or the mount can't be generated.",
+      fix: { label: "Set base", target: { step: "mount", field: "baseThicknessMm" } },
+      relatesTo: { step: "mount" },
+    });
+  }
 
   // ---- Thickness ----
   if (!isKnown(board.thicknessMm)) {
@@ -310,7 +326,14 @@ export function exportReadiness(project: Project, items = validateProject(projec
     checklist.push(`Outline and ${project.board.holes.length} holes captured`);
   if (isKnown(project.board.thicknessMm))
     checklist.push(`Board thickness measured · ${project.board.thicknessMm.value.toFixed(2)} mm`);
-  if (hasGeneration) checklist.push("Generated bracket avoids all keep-outs");
+  if (hasGeneration) {
+    const clips = project.generated!.warnings.length;
+    checklist.push(
+      clips === 0
+        ? "Generated bracket avoids all keep-outs"
+        : `Generated bracket with ${clips} clipped standoff seat${clips === 1 ? "" : "s"} (see warnings)`,
+    );
+  }
   const summary = summarize(items);
   checklist.push(`${summary.errors} errors · ${summary.warnings} warnings · model v${project.version}`);
   return { ready: blockers.length === 0 && isCalibrated && hasGeneration, blockers, checklist };

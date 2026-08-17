@@ -38,6 +38,41 @@ describe("mock generator determinism + guards", () => {
     if (!r.ok) expect(r.error.code).toBe("MISSING_DIAMETER");
   });
 
+  it("refuses to generate a height from an unknown standoff/base (unknown is never zero)", async () => {
+    const p = createSampleProject(1_000_000);
+    p.mount.standoffHeightMm = unknownVal<number>();
+    expect(computeDimensions(p)).toBeNull();
+    const r = await mockGenerator.generate(p);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("MISSING_MOUNT_HEIGHT");
+  });
+
+  it("skips seat-clip warnings when the boss diameter is unknown (no fabricated seat)", () => {
+    const p = createSampleProject(1_000_000);
+    expect(computeWarnings(p).length).toBeGreaterThan(0); // KO-3 clips S4 with a known 7mm boss
+    p.mount.bossDiameterMm = unknownVal<number>();
+    expect(computeWarnings(p)).toHaveLength(0);
+  });
+
+  it("changes the parameter hash when a keep-out moves, but not on a units toggle", async () => {
+    const base = createSampleProject(1_000_000);
+    const a = await mockGenerator.generate(base);
+
+    const moved = createSampleProject(1_000_000);
+    moved.board.keepOuts[2].rectPx = { x: 120, y: 120, w: 300, h: 80 }; // move KO-3 away
+    const b = await mockGenerator.generate(moved);
+
+    const inch = createSampleProject(1_000_000);
+    inch.units = "inch";
+    const c = await mockGenerator.generate(inch);
+
+    expect(a.ok && b.ok && c.ok).toBe(true);
+    if (a.ok && b.ok && c.ok) {
+      expect(b.model.paramsHash).not.toBe(a.model.paramsHash); // geometry change → new hash
+      expect(c.model.paramsHash).toBe(a.model.paramsHash); // display unit → same hash
+    }
+  });
+
   it("does not advertise exact-solid capability (no real kernel yet)", () => {
     expect(mockGenerator.capabilities.exactSolid).toBe(false);
   });

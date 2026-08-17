@@ -6,18 +6,13 @@
  * it with a kernel-backed adapter is the subject of GEOMETRY_GENERATION_PLAN.
  */
 import { bbox, rectIntersectsCircle, circlesOverlap, type Point } from "@/core/geom";
-import { boardFrame, generationParams, outlineDims } from "@/core/project/derive";
+import { boardFrame, generationParams, outlineDims, standoffSeatRadiusPx } from "@/core/project/derive";
 import type { GeneratedDimensions, GeneratedModel, KeepOut, Project } from "@/core/project/types";
 import { maybe } from "@/core/project/value";
 import { shortHash } from "@/lib/id";
 import type { GenerateResult, GeometryAdapter } from "./adapter";
 
 const WALL_MM = 3; // Illustrative wall/margin around the board footprint.
-
-function seatRadiusPx(project: Project, pxPerMm: number): number {
-  const boss = maybe(project.mount.bossDiameterMm) ?? 7;
-  return (boss / 2) * pxPerMm;
-}
 
 function keepOutHitsCircle(k: KeepOut, center: Point, radiusPx: number): boolean {
   if (k.shape === "rect" && k.rectPx) return rectIntersectsCircle(k.rectPx, center, radiusPx);
@@ -28,11 +23,16 @@ function keepOutHitsCircle(k: KeepOut, center: Point, radiusPx: number): boolean
   return false;
 }
 
+/**
+ * Returns null when the mount height cannot be derived because standoff height or
+ * base thickness is Unknown — the height must never be fabricated from an absent Val.
+ */
 export function computeDimensions(project: Project): GeneratedDimensions | null {
   const dims = outlineDims(project);
   if (!dims) return null;
-  const base = maybe(project.mount.baseThicknessMm) ?? 0;
-  const standoff = maybe(project.mount.standoffHeightMm) ?? 0;
+  const base = maybe(project.mount.baseThicknessMm);
+  const standoff = maybe(project.mount.standoffHeightMm);
+  if (base == null || standoff == null) return null;
   const standoffCount = project.board.holes.length;
   const widthMm = Math.round(dims.widthMm + 2 * WALL_MM);
   const depthMm = Math.round(dims.heightMm + 2 * WALL_MM);
@@ -41,12 +41,15 @@ export function computeDimensions(project: Project): GeneratedDimensions | null 
   return { widthMm, depthMm, heightMm, standoffCount, bodies: 1, triangles };
 }
 
-/** Warnings that a real generator would surface — clipped seats, thin walls. */
+/**
+ * Warnings that a real generator would surface — clipped seats, thin walls. When the
+ * standoff seat radius is indeterminate (unknown boss diameter), seat-clip warnings
+ * are skipped rather than computed against an assumed size.
+ */
 export function computeWarnings(project: Project): string[] {
   const warnings: string[] = [];
-  const cal = project.calibration;
-  if (!cal || cal.status !== "valid" || cal.pxPerMm == null) return warnings;
-  const seat = seatRadiusPx(project, cal.pxPerMm);
+  const seat = standoffSeatRadiusPx(project);
+  if (seat == null) return warnings;
   project.board.holes.forEach((h, i) => {
     for (const k of project.board.keepOuts) {
       if (keepOutHitsCircle(k, h.centerPx, seat)) {
@@ -92,6 +95,18 @@ export const mockGenerator: GeometryAdapter = {
           code: "MISSING_DIAMETER",
           message: `${missingDiameter.label} has no diameter; its standoff and screw hole cannot be sized.`,
           feature: missingDiameter.label,
+        },
+      };
+    }
+    // The mount height is base + standoff; neither may be Unknown (unknown is never zero).
+    if (maybe(project.mount.standoffHeightMm) == null || maybe(project.mount.baseThicknessMm) == null) {
+      const feature = maybe(project.mount.standoffHeightMm) == null ? "standoff height" : "base thickness";
+      return {
+        ok: false,
+        error: {
+          code: "MISSING_MOUNT_HEIGHT",
+          message: `Mount ${feature} is not set; the bracket height cannot be derived.`,
+          feature,
         },
       };
     }
