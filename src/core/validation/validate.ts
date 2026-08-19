@@ -8,6 +8,7 @@ import { bbox, rectIntersectsCircle, circlesOverlap, type Point } from "@/core/g
 import type { KeepOut, Project } from "@/core/project/types";
 import { isGenerationCurrent, outlineDims, standoffSeatRadiusPx } from "@/core/project/derive";
 import { isKnown, type Val } from "@/core/project/value";
+import { fmtLen, unitLabel } from "@/core/units/units";
 
 export type Severity = "error" | "warning" | "info";
 
@@ -455,7 +456,9 @@ export function exportReadiness(project: Project, items = validateProject(projec
   if (project.board.outline?.confirmed)
     checklist.push(`Outline and ${project.board.holes.length} holes captured`);
   if (isKnown(project.board.thicknessMm) && project.board.thicknessMm.value > 0)
-    checklist.push(`Board thickness measured · ${project.board.thicknessMm.value.toFixed(2)} mm`);
+    checklist.push(
+      `Board thickness measured · ${fmtLen(project.board.thicknessMm.value, project.units)} ${unitLabel(project.units)}`,
+    );
   if (generationCurrent && project.generated) {
     const clips = project.generated.warnings.length;
     checklist.push(

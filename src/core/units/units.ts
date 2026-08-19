@@ -25,6 +25,22 @@ export function fromDisplay(value: number, unit: Unit): number {
   return unit === "mm" ? value : inchToMm(value);
 }
 
+/** Sensible fixed decimals for each unit (inch needs finer resolution than mm). */
+export function unitDecimals(unit: Unit): number {
+  return unit === "mm" ? 2 : 3;
+}
+
+/** Short suffix for readouts. */
+export function unitLabel(unit: Unit): string {
+  return unit === "mm" ? "mm" : "in";
+}
+
+/** Format a millimetre magnitude in the display unit (no unit suffix). */
+export function fmtLen(mm: number, unit: Unit, decimals = unitDecimals(unit)): string {
+  if (!Number.isFinite(mm)) return "—";
+  return toDisplay(mm, unit).toFixed(decimals);
+}
+
 /**
  * A calibration establishes a uniform pixel-per-millimetre scale from one known
  * distance placed on the reference image. Two lines (future) would additionally

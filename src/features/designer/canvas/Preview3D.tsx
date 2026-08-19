@@ -5,6 +5,7 @@ import { Chip } from "@/components/ui/Chip";
 import type { Project } from "@/core/project/types";
 import { isGenerationCurrent } from "@/core/project/derive";
 import { clock } from "@/lib/format";
+import { fmtLen, unitLabel } from "@/core/units/units";
 import { useStore, type DesignerUi } from "@/state/store";
 import { MeshView3D } from "./MeshView3D";
 
@@ -63,7 +64,7 @@ export function Preview3D({ project }: { project: Project }) {
       {gen ? (
         <>
           <div className="cv-pill" style={{ right: 14, top: 118 }}>
-            <b>Bracket</b>·plate + standoffs · {gen.dims.widthMm} × {gen.dims.depthMm} × {gen.dims.heightMm} mm
+            <b>Bracket</b>·plate + standoffs · {fmtLen(gen.dims.widthMm, project.units)} × {fmtLen(gen.dims.depthMm, project.units)} × {fmtLen(gen.dims.heightMm, project.units)} {unitLabel(project.units)}
           </div>
           <div className="cv-pill" style={{ right: 14, top: 152 }}>
             {gen.dims.standoffCount} standoffs · {project.mount.fastener} · {gen.dims.bodies} bodies · {gen.dims.triangles.toLocaleString()} △

@@ -3,7 +3,7 @@ import { Icon } from "@/icons/Icon";
 import { Kbd } from "@/components/ui/Badge";
 import type { Project } from "@/core/project/types";
 import { outlineDims } from "@/core/project/derive";
-import { fmt } from "@/lib/format";
+import { fmtLen, unitLabel } from "@/core/units/units";
 import { useStore } from "@/state/store";
 import { CanvasToolbar, StatusBar, ZoomControl } from "./chrome";
 import { EmptyState } from "./EmptyState";
@@ -77,7 +77,7 @@ function ContextPill({ project, step }: { project: Project; step: string }) {
     return (
       <div className="cv-pill" style={{ left: 20, bottom: 46 }}>
         <Icon name="square-outline" />
-        Outline <b>{fmt(dims.widthMm)} × {fmt(dims.heightMm)} mm</b>
+        Outline <b>{fmtLen(dims.widthMm, project.units)} × {fmtLen(dims.heightMm, project.units)} {unitLabel(project.units)}</b>
       </div>
     );
   }

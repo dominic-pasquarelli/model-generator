@@ -2,7 +2,8 @@ import { cn } from "@/lib/cn";
 import { Icon, type IconName } from "@/icons/Icon";
 import { Chip, StateChip } from "@/components/ui/Chip";
 import type { Project } from "@/core/project/types";
-import { fmt, fmtInt } from "@/lib/format";
+import { fmtInt } from "@/lib/format";
+import { fmtLen, unitLabel } from "@/core/units/units";
 import { useStore, type ToolId } from "@/state/store";
 
 interface ToolSpec {
@@ -128,13 +129,13 @@ export function StatusBar({ project }: { project: Project }) {
       <div className="grp">
         <span>x</span>
         {mmX != null ? (
-          <span className="val">{fmt(mmX)} mm</span>
+          <span className="val">{fmtLen(mmX, project.units)} {unitLabel(project.units)}</span>
         ) : (
           <span className="muted-val">{cursor ? `${fmtInt(cursor.x)} px` : "—"}</span>
         )}
         <span>y</span>
         {mmY != null ? (
-          <span className="val">{fmt(mmY)} mm</span>
+          <span className="val">{fmtLen(mmY, project.units)} {unitLabel(project.units)}</span>
         ) : (
           <span className="muted-val">{cursor ? `${fmtInt(cursor.y)} px` : "—"}</span>
         )}
