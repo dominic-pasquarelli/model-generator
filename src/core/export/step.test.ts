@@ -76,4 +76,21 @@ describe("meshToStep — structural validity", () => {
   it("is deterministic for an unchanged mesh", () => {
     expect(sampleStep().step).toBe(sampleStep().step);
   });
+
+  it("emits no lowercase-e exponent tokens even when a hole sits at the board origin", () => {
+    // Hole at the outline bbox min → board-mm (0,0); a 48-seg ring seam lands on cos(π/2),
+    // which without the -0/near-zero snap would serialise as a lowercase-e exponent real.
+    const p = createSampleProject(1_000_000);
+    p.board.holes = [{ ...p.board.holes[0], centerPx: { x: 75, y: 50 } }];
+    const r = buildBracketMesh(p);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const step = meshToStep(r.mesh, META);
+    expect(/[0-9]e[+-]?[0-9]/.test(step), "lowercase-e exponent present").toBe(false);
+    // still reference-complete
+    const entities = parseEntities(step);
+    const data = step.slice(step.indexOf("DATA;"));
+    const refs = data.match(/#(\d+)/g)!.map((x) => Number(x.slice(1)));
+    expect(refs.filter((x) => !entities.has(x))).toEqual([]);
+  });
 });

@@ -2,6 +2,7 @@ import { bbox, rectIntersectsCircle, circlesOverlap, type Point, type Rect } fro
 import type { KeepOut, MountingHole, Project } from "@/core/project/types";
 import { isKnown, maybe } from "@/core/project/value";
 import { standoffSeatRadiusPx } from "@/core/project/derive";
+import { fmtLen, unitLabel, type Unit } from "@/core/units/units";
 import type { Selection } from "@/state/store";
 import type { StepId } from "@/core/validation/validate";
 
@@ -72,6 +73,7 @@ function HoleMark({
   selected,
   conflict,
   k,
+  unit,
   onSelect,
   interactive,
 }: {
@@ -79,6 +81,7 @@ function HoleMark({
   selected: boolean;
   conflict: boolean;
   k: number;
+  unit: Unit;
   onSelect: () => void;
   interactive: boolean;
 }) {
@@ -93,7 +96,7 @@ function HoleMark({
     ? `${hole.label} ⌀ —`
     : hole.state === "inferred"
       ? `${hole.label} inferred`
-      : `${hole.label} ⌀${dia?.toFixed(2)}${hole.state === "confirmed" ? " ✓" : ""}`;
+      : `${hole.label} ⌀${dia != null ? `${fmtLen(dia, unit)} ${unitLabel(unit)}` : "—"}${hole.state === "confirmed" ? " ✓" : ""}`;
   return (
     <g
       style={{ cursor: interactive ? "pointer" : "inherit", pointerEvents: interactive ? "auto" : "none" }}
@@ -301,6 +304,7 @@ export function OverlayMarks({
           selected={selection.kind === "hole" && selection.id === h.id}
           conflict={conflicts.has(h.id)}
           k={k}
+          unit={project.units}
           interactive={interactive}
           onSelect={() => onSelect({ kind: "hole", id: h.id })}
         />

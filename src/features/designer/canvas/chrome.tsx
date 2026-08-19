@@ -142,7 +142,7 @@ export function StatusBar({ project }: { project: Project }) {
       </div>
       {!calibrated ? (
         <div className="grp">
-          <span>mm</span>
+          <span>{unitLabel(project.units)}</span>
           <span className="muted-val">{project.reference ? "— calibrate to see" : "— (no reference)"}</span>
         </div>
       ) : null}

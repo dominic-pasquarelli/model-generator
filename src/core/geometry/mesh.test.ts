@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createSampleProject } from "@/core/project/fixtures";
-import { unknownVal } from "@/core/project/value";
+import { measured, unknownVal } from "@/core/project/value";
 import { buildBracketMesh, type BodyMesh } from "./mesh";
 
 /**
@@ -92,6 +92,22 @@ describe("buildBracketMesh — real solid", () => {
     const r3 = buildBracketMesh(noCal);
     expect(r3.ok).toBe(false);
     if (!r3.ok) expect(r3.error.code).toBe("UNRESOLVED_MODEL");
+  });
+
+  it("stays watertight when a bore is too small to tessellate (drops to a solid standoff)", () => {
+    const p = createSampleProject(1_000_000);
+    // Sub-tolerance bore radius: without a guard the bore ring would weld-collapse.
+    p.board.holes.forEach((h) => (h.diameterMm = measured(0.0002)));
+    p.mount.clearanceMm = measured(0);
+    const r = buildBracketMesh(p);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    for (const body of r.mesh.bodies) {
+      const a = edgeAudit(body);
+      expect(a.badDirected, `${body.name} manifold`).toBe(0);
+      expect(a.badUndirected, `${body.name} watertight`).toBe(0);
+      expect(a.euler, `${body.name} closed`).toBe(2);
+    }
   });
 
   it("adds two more bodies for four side tabs", () => {

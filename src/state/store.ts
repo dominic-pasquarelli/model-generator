@@ -556,7 +556,15 @@ export const useStore = create<AppState>((set, get) => {
     setView3d: (view3d) => set((s) => ({ ui: { ...s.ui, view3d } })),
     toggleAuto: () => set((s) => ({ ui: { ...s.ui, autoGenerate: !s.ui.autoGenerate } })),
 
-    setUnits: (units) => mutate((p) => void (p.units = units)),
+    setUnits: (units) => {
+      const current = get().current;
+      if (!current || current.units === units) return;
+      // Units are display-only: persist the preference without bumping the model version,
+      // pushing an undo snapshot, or invalidating the generation.
+      const next = { ...current, units };
+      const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
+      commit(projectsNext, { current: next });
+    },
     setBoardName: (name) => mutate((p) => void (p.board.name = name)),
     setBoardRevision: (rev) => mutate((p) => void (p.board.revision = rev)),
     setThicknessMm: (mm) => mutate((p) => void (p.board.thicknessMm = valFromInput(mm, p.board.thicknessMm))),

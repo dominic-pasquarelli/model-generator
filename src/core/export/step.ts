@@ -24,11 +24,15 @@ export interface StepMeta {
 
 /** Format a real with a mandatory decimal point, normalising -0 and trimming noise. */
 function r(v: number): string {
-  const x = Object.is(v, -0) ? 0 : v;
+  // Snap -0 and sub-nanometre numerical noise (e.g. cos(π/2) ≈ 6e-17 at a ring seam)
+  // to exact 0, so no meaningless near-zero exponent tokens are ever emitted.
+  let x = Object.is(v, -0) ? 0 : v;
+  if (Math.abs(x) < 1e-9) x = 0;
   if (Number.isInteger(x)) return `${x}.`;
   let s = x.toPrecision(9);
-  if (s.includes("e") || s.includes("E")) return s;
-  s = s.replace(/(\.\d*?)0+$/, "$1").replace(/\.$/, ".");
+  // ISO-10303-21 REALs require an UPPERCASE exponent; JS toPrecision emits lowercase.
+  if (s.includes("e") || s.includes("E")) return s.toUpperCase();
+  s = s.replace(/(\.\d*?)0+$/, "$1");
   return s.includes(".") ? s : `${s}.`;
 }
 

@@ -132,6 +132,25 @@ describe("generation freshness under async races", () => {
   });
 });
 
+describe("units toggle is display-only", () => {
+  it("does not bump the model version, add an undo entry, or invalidate the generation", async () => {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+    await useStore.getState().generate();
+    expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
+
+    const version = useStore.getState().current!.version;
+    const pastLen = useStore.getState().past.length;
+    useStore.getState().setUnits("inch");
+
+    const st = useStore.getState();
+    expect(st.current!.units).toBe("inch");
+    expect(st.current!.version).toBe(version); // no model-version bump
+    expect(st.past.length).toBe(pastLen); // no undo snapshot
+    expect(isGenerationCurrent(st.current!)).toBe(true); // generation stays current
+  });
+});
+
 describe("undo / redo", () => {
   it("steps backward and forward through edits and drops redo on a new edit", () => {
     openSample();

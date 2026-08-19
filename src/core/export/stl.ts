@@ -9,9 +9,15 @@ import type { BracketMesh } from "@/core/geometry/mesh";
 /** Fixed 6-significant-digit formatting keeps output deterministic across machines. */
 function n(v: number): string {
   if (!Number.isFinite(v)) return "0";
-  // Normalise -0 to 0 so identical geometry serialises byte-identically.
-  const x = v === 0 ? 0 : v;
-  return x.toPrecision(6).replace(/\.?0+$/, "").replace(/(\.\d*?)0+e/i, "$1e");
+  // Normalise -0 and sub-nanometre noise to 0 so identical geometry serialises identically.
+  let x = Object.is(v, -0) ? 0 : v;
+  if (Math.abs(x) < 1e-9) x = 0;
+  let s = x.toPrecision(6);
+  if (/[eE]/.test(s)) return s; // exponent form is acceptable for STL
+  // Trim trailing zeros ONLY within the fractional part — never digits of an integer
+  // (toPrecision(6) drops the decimal point for round integers ≥ 1e5).
+  if (s.includes(".")) s = s.replace(/0+$/, "").replace(/\.$/, "");
+  return s;
 }
 
 function facetNormal(ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number): [number, number, number] {

@@ -51,6 +51,13 @@ export const SEGMENTS = 48;
 export const WALL_MM = 3;
 /** Minimum boss wall left around a bore before it is treated as escaping the standoff. */
 const MIN_BOSS_WALL_MM = 0.6;
+/**
+ * Minimum bore radius (mm) that still tessellates to a non-degenerate ring. Below this,
+ * adjacent bore-ring vertices fall within the 1e-4 mm vertex-weld tolerance and would
+ * collapse the ring — so a sub-threshold bore is dropped (a solid standoff) rather than
+ * silently opening the shell. Sub-50-micron screw holes are not physically meaningful.
+ */
+const MIN_BORE_RADIUS_MM = 0.05;
 
 // ----------------------------------------------------------------------------
 // Per-body mesh builder — welds coincident vertices so shared edges are shared,
@@ -158,7 +165,7 @@ function standoff(
     const m = (ang(i) + ang(i + 1)) / 2;
     return [Math.cos(m), Math.sin(m), 0];
   };
-  const hasBore = bore > 0 && bore < outer;
+  const hasBore = bore >= MIN_BORE_RADIUS_MM && bore < outer;
 
   for (let i = 0; i < seg; i++) {
     const ro = radialOut(i);

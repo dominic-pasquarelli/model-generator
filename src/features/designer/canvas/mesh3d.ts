@@ -4,8 +4,10 @@
  * Projects a real {@link BracketMesh} (board-space millimetres, Z up) to flat-shaded,
  * back-to-front-sorted 2D polygons for an SVG preview. Orthographic, deterministic, and
  * pure — no WebGL, no libraries — so the preview shows the ACTUAL generated geometry the
- * exporters serialise, not an illustration. Backface culling + painter's ordering give a
- * correct opaque render of the closed solid.
+ * exporters serialise, not an illustration. Backface culling + centroid-depth painter's
+ * ordering give a good opaque approximation; because the multi-body solid interpenetrates
+ * (standoffs sink into the plate), average-depth sorting is not exact at grazing angles,
+ * so occasional facet-ordering artifacts are possible. It is a preview, not a raytrace.
  */
 import type { BracketMesh, Vec3 } from "@/core/geometry/mesh";
 
