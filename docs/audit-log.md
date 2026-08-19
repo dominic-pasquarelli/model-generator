@@ -2,8 +2,8 @@
 title: Audit Log
 tier: record
 status: append-only
-updated: 2026-08-17
-audited: 2026-08-17
+updated: 2026-08-19
+audited: 2026-08-19
 related:
   - docs/AUDIT.md
   - docs/DOC_SPEC.md
@@ -266,3 +266,33 @@ Disposition:
 - No tech debt recorded.
 - No captured INBOX items recorded.
 
+
+## 2026-08-19 - Real solid, exports, 3D, and usability sprint
+
+Scope: real geometry generator, STL + faceted-B-rep STEP export, live 3D preview of the generated solid, `.mgproj` save/open, mm/inch display, undo/redo; ADRs 0005/0006/0007 accepted; README, AGENTS, NEXT, HISTORY updated; regenerated map.
+
+Branch/commit: `claude/sprint-functionality-build-617mjf`; base `main` was `566c190` (merge of PR #5).
+
+Commands:
+
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- 79 host-level unit tests pass, including a per-body manifold audit of the generated solid (each directed edge once, each undirected edge shared by two triangles, Euler V−E+F=2), STL facet-per-triangle + determinism, STEP structural validity (reference-complete graph, one closed shell per body, one ADVANCED_FACE per triangle, every edge shared by exactly two faces with opposite ORIENTED_EDGE sense), 3D projection determinism + culling, undo/redo, `.mgproj` round-trip, and unit formatting.
+- 9 Playwright cases pass headless against a production build; the mount and export views now render the actual generated solid.
+- `tsc -b` typechecks; `vite build` bundles; doc-audit PASS; doc-audit tests pass.
+
+Findings:
+
+- ERROR: none after audit.
+- WARN: the STEP is a faceted B-rep and the Fusion import evidence gate is still open (no `evidence/fusion-import/` record); printed-part fit is unverified; automatic board detection and camera/skew-aware calibration remain unbuilt; no CI yet.
+- INFO: reference images embed as data-URL `src` inside the `.mgproj` JSON (large photos bloat the file — ADR 0007 open refinement); the illustrative mock generator is retained for store-test isolation.
+
+Disposition:
+
+- Geometry kernel (ADR 0005), export format (ADR 0006), and project file schema (ADR 0007) moved from Proposed to Accepted, each with the honest boundary of what remains unproven recorded in-ADR.
+- No tech debt recorded.
+- No captured INBOX items recorded.

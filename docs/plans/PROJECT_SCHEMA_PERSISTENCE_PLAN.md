@@ -2,8 +2,8 @@
 title: Project Schema, Persistence and Migration Plan
 tier: workflow
 status: proposed
-updated: 2026-08-17
-audited: 2026-08-17
+updated: 2026-08-19
+audited: 2026-08-19
 related:
   - docs/PROJECT_VISION.md
   - docs/ARCHITECTURE.md
@@ -14,6 +14,8 @@ related:
 ---
 
 # Project Schema, Persistence and Migration Plan
+
+> **Status update (2026-08-19):** Portable **`.mgproj` save/open is Built** (ADR 0007 Accepted): `downloadProjectFile` / `importProjectFile` in the store, on the existing versioned schema, forward-migration harness, and runtime shape validation. Import is additive (fresh id on collision) and corrupt files fail with a diagnosable `MgFileError`; unknown/missing `Val<T>` values round-trip. The one open refinement is asset packaging — reference images currently embed as data-URL `src` inside the JSON, which a future zipped-container revision may externalise (schema and migration policy unchanged).
 
 ## Purpose & Scope
 

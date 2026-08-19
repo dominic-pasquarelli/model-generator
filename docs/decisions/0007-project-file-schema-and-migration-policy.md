@@ -2,10 +2,10 @@
 title: ADR 0007 Project File Schema And Migration Policy
 tier: decision
 adr: 0007
-status: proposed
+status: accepted
 date: 2026-08-16
-updated: 2026-08-16
-audited: 2026-08-16
+updated: 2026-08-19
+audited: 2026-08-19
 related:
   - docs/ARCHITECTURE.md
   - docs/PROJECT_VISION.md
@@ -15,7 +15,15 @@ related:
 
 ## Status
 
-Proposed. Schema spike required.
+Accepted (2026-08-19). Portable **`.mgproj` files** (save + open) are Built and Verified host/browser-level, on the existing versioned schema and forward-migration harness. Asset-packaging for large reference images remains a documented refinement (see Decision).
+
+## Decision (2026-08-19)
+
+The project file is JSON — the `{ schemaVersion, project }` wrapper written by `serializeProject` and read by `parseProjectFile` (`src/core/project/schema.ts`), carried by the app as the `.mgproj` extension. Save/open UX is wired: `downloadProjectFile` (designer top bar) serialises the open project; `importProjectFile` (library "Open project…") parses one back in. Import is **additive** — a colliding project id is reassigned a fresh id so nothing is clobbered — and corrupt input fails with a diagnosable `MgFileError` surfaced in the UI, never silent defaults.
+
+The Acceptance Criteria below are met: schema version and unit/coordinate conventions are explicit; unknown/missing values survive load/save (the `Val<T>` union round-trips); fixture migration tests (including a `v0→v1` case) run in the host suite; a round-trip store test locks additive import; and export metadata references the source schema version and `paramsHash`.
+
+Open refinement (not blocking): reference images are embedded as data-URL `src` inside the JSON, which is simple and self-contained but bloats files with large photos. A future revision may switch large assets to a zipped container (`.mgproj` as an archive) with referenced assets — a packaging change that does not alter the semantic schema or the migration policy.
 
 ## Question
 

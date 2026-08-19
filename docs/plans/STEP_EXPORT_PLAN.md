@@ -2,8 +2,8 @@
 title: STEP Export and Fusion Import Gate Plan
 tier: workflow
 status: proposed
-updated: 2026-08-17
-audited: 2026-08-17
+updated: 2026-08-19
+audited: 2026-08-19
 related:
   - docs/PROJECT_VISION.md
   - docs/ARCHITECTURE.md
@@ -13,6 +13,8 @@ related:
 ---
 
 # STEP Export and Fusion Import Gate Plan
+
+> **Status update (2026-08-19):** The **readiness gate, STL writer, faceted-B-rep STEP writer, and metadata sidecar are Built** and Verified host-level (ADR 0006 Accepted): `src/core/export/{stl,step,exporter}.ts`. STEP is a real AP214 `MANIFOLD_SOLID_BREP` closed-shell solid (one body per mesh body), structurally validated in tests. This satisfies plan Steps 1–5 with the caveat that the geometry path is the self-contained faceted mesh (ADR 0005), not an analytic kernel. **Step 6 — the Autodesk Fusion import evidence gate — is the open blocker:** no `evidence/fusion-import/` record exists, so no "usable in Fusion" claim is made. The Fusion protocol below is the exact next action.
 
 ## Purpose & Scope
 

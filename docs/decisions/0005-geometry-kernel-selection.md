@@ -2,10 +2,10 @@
 title: ADR 0005 Geometry Kernel Selection
 tier: decision
 adr: 0005
-status: proposed
+status: accepted
 date: 2026-08-16
-updated: 2026-08-16
-audited: 2026-08-16
+updated: 2026-08-19
+audited: 2026-08-19
 related:
   - docs/ARCHITECTURE.md
   - docs/workflows/BOARD_MOUNT_DESIGNER.md
@@ -15,7 +15,29 @@ related:
 
 ## Status
 
-Proposed. Experiment required.
+Accepted (2026-08-19). A **self-contained TypeScript mesh solid generator** is Built and Verified at host level. The exact-analytic-kernel path (OCCT/replicad) and the Fusion-import evidence gate remain open — see Decision and ADR 0006.
+
+## Decision (2026-08-19)
+
+The **mesh-only path** in the matrix below was promoted from a fallback to the shipped generator and implemented dependency-free in TypeScript (`src/core/geometry/mesh.ts` + `src/core/geometry/solidGenerator.ts`, the active `GeometryAdapter`).
+
+Rationale: the Board Mount Designer geometry family — a prismatic plate, cylindrical standoffs with coaxial bores, and box tabs — is simple enough to generate a **real, watertight, closed-manifold multi-body solid deterministically without any WASM kernel**. This clears the browser-viability, determinism, and diagnostics criteria immediately at zero bundle cost, and the same solid feeds the 3D preview and both exporters (the "same shared geometry path" rule).
+
+What it produces and its evidence class:
+
+- A multi-body closed solid (plate + one bored standoff per hole + side tabs). Every body passes a **host-level manifold audit** (each directed edge used exactly once, each undirected edge shared by exactly two triangles, Euler `V − E + F = 2`).
+- **Generated-geometry-level** fixture checks pass: the ADR two/four-hole rectangular fixture yields the expected footprint (85 mm + 2×3 mm wall = 91 mm), height (base + standoff), and standoff count.
+- **Browser-level**: the Playwright journey renders the generated solid in the live 3D preview.
+- Diagnostics: generation returns coded errors (`MISSING_DIAMETER`, `MISSING_MOUNT_HEIGHT`, `UNRESOLVED_MODEL`, …) with the implicated feature, never fabricating geometry from an Unknown value.
+
+What is explicitly **not** decided or earned here:
+
+- An **exact analytic B-rep kernel** (OCCT-WASM / replicad) is deferred. Consequently the STEP export is a **faceted** B-rep (curved standoff walls are facets), owned by ADR 0006.
+- **Printed-part fit** is unproven (Phase 9).
+
+Reconsideration trigger: if analytic curved surfaces, true fillets, or parametric CAD editability beyond faceted import are required, revisit the OCCT-WASM path behind the unchanged `GeometryAdapter` seam — the shell depends only on that interface, so the swap does not touch the app.
+
+The original spike framing below is retained for provenance.
 
 ## Question
 

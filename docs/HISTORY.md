@@ -2,8 +2,8 @@
 title: History
 tier: record
 status: append-only
-updated: 2026-08-17
-audited: 2026-08-17
+updated: 2026-08-19
+audited: 2026-08-19
 related:
   - docs/NEXT.md
   - docs/audit-log.md
@@ -81,4 +81,20 @@ Implemented the six merge-blockers from an external reviewer of PR #5 — all sh
 6. Export lifecycle honesty: honest placeholder stages (no fake kernel booleans, no fixed hole counts), `durationMs` is explicitly unavailable for the illustrative adapter, an `ExportRecord` is written only when the download is actually initiated (dialog reads "Artifact prepared", not "Exported"), current-export status is keyed to the generation, and "Copy report" is wired.
 
 Verification: 60 host-level unit tests (jsdom store tests for quota/malformed-recovery/survivors/generation-race/export-prepared-vs-downloaded, pure `generationKey`/`resolveCommit`/domain-validity tests) and 9 Playwright cases (added PNG-upload-reload, endpoint-placement calibration, keep-out shape change, and export-prepared-not-recorded) pass; `tsc` and `vite build` are clean; doc-audit passes.
+
+## 2026-08-19 - Real solid, real exports, live 3D, and usability sprint
+
+Turned the illustrative shell into a working tool. Preview and export now derive from one real, deterministic, dependency-free solid built from the canonical model — no kernel dependency, no placeholders.
+
+- **Real geometry** (`src/core/geometry/mesh.ts`, `solidGenerator.ts`): `buildBracketMesh` emits a watertight, closed-manifold multi-body solid in board-space millimetres — a base plate, one hollow standoff (outer boss + coaxial blind bore) per mounting hole, and optional side tabs. Faceting is a single fixed segment count shared by every consumer. Verified host-level: every body passes a directed-edge / undirected-edge / Euler manifold audit, and the ADR-0005 fixture yields the expected 91 mm footprint, base+standoff height, and standoff count. It is now the active `GeometryAdapter` (`exactSolid: false`, `previewMesh: true`, `facetedStep: true`); the illustrative mock is retained for store-test isolation. ADR 0005 → Accepted.
+- **Real STL** (`src/core/export/stl.ts`): a genuine ASCII STL — a printable mesh of the solid with per-facet normals; verified one facet per triangle, deterministic bytes.
+- **Real STEP** (`src/core/export/step.ts`): a real faceted B-rep, ISO-10303-21 AP214 — one `MANIFOLD_SOLID_BREP` closed shell per body, welded vertices, shared `EDGE_CURVE`s referenced with opposite `ORIENTED_EDGE` sense. Verified host-level: well-formed envelope, all `#id` references resolve, one closed shell per body, one `ADVANCED_FACE` per triangle, every edge shared by exactly two faces with opposite sense. The exporter writes honest metadata (`kernel`, geometry kind, body/triangle counts, `unsupportedClaims`). ADR 0006 → Accepted (Fusion import evidence gate still open).
+- **Live 3D preview** (`canvas/mesh3d.ts`, `MeshView3D.tsx`): a dependency-free orthographic projector with backface culling, painter's ordering, and flat shading. The 3D preview and the export view now render the ACTUAL generated solid (drag to orbit); the static illustration image is gone. "Derived from canonical model" is now literally true.
+- **Durable project files**: `.mgproj` save (`downloadProjectFile`) and open (library "Open project…", `importProjectFile`) on the existing versioned schema + migrations; import is additive (fresh id on collision), corrupt files fail with a diagnosable `MgFileError`. ADR 0007 → Accepted.
+- **Unit-aware display**: the mm/inch toggle (previously stored but ignored) is now a live display conversion across inspector fields (via `MmField`) and readouts (`fmtLen`) — canonical model stays in mm.
+- **Undo/redo**: per-project snapshot history in the store, wiring the previously-disabled top-bar buttons plus Ctrl/Cmd+Z / Ctrl/Cmd+Shift+Z.
+
+Honesty boundary held: the STEP is faceted (not analytic surfaces); Fusion import evidence and printed-part fit remain unrecorded; automatic board detection and camera/skew-aware calibration remain unbuilt. The export UI, sidecar, README, AGENTS, and ADRs 0005/0006/0007 all state this precisely.
+
+Verified: 79 host-level unit tests (added mesh manifold audit, STL/STEP structural validity, 3D projection, undo/redo, project-file round-trip, unit formatting) and 9 Playwright cases pass headless; `tsc` and `vite build` are clean; doc-audit passes.
 

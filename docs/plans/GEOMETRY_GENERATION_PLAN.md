@@ -2,8 +2,8 @@
 title: Geometry Generation and Kernel Adapter Plan
 tier: workflow
 status: proposed
-updated: 2026-08-17
-audited: 2026-08-17
+updated: 2026-08-19
+audited: 2026-08-19
 related:
   - docs/PROJECT_VISION.md
   - docs/ARCHITECTURE.md
@@ -13,6 +13,8 @@ related:
 ---
 
 # Geometry Generation and Kernel Adapter Plan
+
+> **Status update (2026-08-19):** A **self-contained TypeScript mesh solid generator is now Built** and is the active `GeometryAdapter` (`src/core/geometry/mesh.ts`, `solidGenerator.ts`; ADR 0005 Accepted). It produces a real watertight, closed-manifold multi-body solid (plate + bored standoffs + tabs), verified host-level, and feeds the live 3D preview and both exporters. This satisfies the plan's Steps 1–4 and 6 (adapter seam, deterministic recipe, keep-out warnings, coded failures) via the mesh path. What this plan still describes and defers: the **exact analytic B-rep kernel** (OCCT/replicad), worker offloading (Step 5), and the analytic STEP-capability probe (Step 7) — the shipped STEP is faceted (ADR 0006). The sections below are the forward-looking spec for that analytic path, retained for provenance.
 
 ## Purpose And Scope
 
