@@ -242,22 +242,23 @@ export function ExportDialog({ project }: { project: Project }) {
           selected={ex.format === "step"}
           name="STEP"
           ext=".step"
-          desc="Target format for CAD refinement in Fusion. This build emits a STEP container placeholder — a real solid body awaits the geometry kernel."
+          desc="Real faceted B-rep solid (ISO-10303-21 AP214). Curved walls are facets, not analytic surfaces; Fusion import is not yet verified."
           onSelect={() => setFormat("step")}
         />
         <RadioCard
           selected={ex.format === "stl"}
           name="STL"
           ext=".stl"
-          desc="Mesh format for print preview and diagnostics. This build emits a placeholder mesh, not a generated surface."
+          desc="Real watertight print mesh of the generated solid, ready for a slicer."
           onSelect={() => setFormat("stl")}
         />
       </div>
       <div style={{ display: "flex", gap: 7, marginTop: 10, fontSize: 11, color: "var(--info)", alignItems: "flex-start" }}>
         <Icon name="info" style={{ width: 13, height: 13, marginTop: 1 }} />
         <div>
-          This build ships an illustrative generator — the artifact is a real metadata sidecar plus a labelled
-          placeholder, not a validated CAD solid. STEP-into-Fusion is the deferred evidence gate (ADR 0006).
+          Real geometry from the canonical model, with a metadata sidecar. STEP is a faceted B-rep and STL a
+          watertight mesh — both verified host-level. Autodesk Fusion import and printed-part fit are not yet
+          verified (the deferred evidence gate, ADR 0006).
         </div>
       </div>
       <div className="fgrid" style={{ marginTop: 12 }}>

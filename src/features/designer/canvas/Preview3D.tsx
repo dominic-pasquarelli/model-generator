@@ -13,9 +13,9 @@ const VIEWS: DesignerUi["view3d"][] = ["iso", "top", "front", "fit"];
 const VIEW_LABEL: Record<DesignerUi["view3d"], string> = { iso: "Iso", top: "Top", front: "Front", fit: "Fit" };
 
 /**
- * 3D preview. The bracket image is an ILLUSTRATION (no kernel yet); dimensions and
- * warnings shown come from the deterministic generator so preview reflects the
- * canonical model. "Derived from canonical model" is stated on the pane tag.
+ * 3D preview. Renders the REAL generated solid via MeshView3D — the same mesh the STL
+ * and STEP exporters serialise — so the preview reflects the canonical model. Dimensions
+ * and warnings come from that generation. "Derived from canonical model" is on the tag.
  */
 export function Preview3D({ project }: { project: Project }) {
   const view3d = useStore((s) => s.ui.view3d);

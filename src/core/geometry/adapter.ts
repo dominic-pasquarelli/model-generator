@@ -1,9 +1,10 @@
 /**
  * Geometry adapter boundary. The canonical model is translated into geometry ONLY
- * through this seam so the kernel choice (ADR 0005) stays replaceable. The shell
- * ships an illustrative deterministic generator (mockGenerator.ts); a real solid
- * kernel is planned in docs/plans/GEOMETRY_GENERATION_PLAN.md and would implement
- * this same interface, additionally emitting an exact solid for STEP export.
+ * through this seam so the kernel choice (ADR 0005) stays replaceable. The active
+ * adapter is the self-contained solid generator (solidGenerator.ts + mesh.ts), which
+ * builds a real watertight, closed-manifold solid; the illustrative mock
+ * (mockGenerator.ts) is retained for test isolation. An exact ANALYTIC B-rep kernel
+ * could later implement this same interface (docs/plans/GEOMETRY_GENERATION_PLAN.md).
  */
 import type { GeneratedModel, Project } from "@/core/project/types";
 
