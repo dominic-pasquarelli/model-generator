@@ -1,3 +1,20 @@
 # Python bytecode from running the doc-audit tooling
 __pycache__/
 *.pyc
+
+# Node / app build
+node_modules/
+dist/
+dist-ssr/
+*.local
+
+# Test + tooling output
+coverage/
+playwright-report/
+test-results/
+.vite/
+node_modules/.tmp/
+
+# Editor
+.DS_Store
+*.log

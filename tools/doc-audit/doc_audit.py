@@ -110,7 +110,17 @@ def is_date(value: object) -> bool:
 
 
 def markdown_files(root: Path) -> list[Path]:
-    ignored = {".git"}
+    # Audit project docs only — never vendored dependencies or build/test output.
+    ignored = {
+        ".git",
+        "node_modules",
+        "dist",
+        "dist-ssr",
+        "coverage",
+        "test-results",
+        "playwright-report",
+        ".vite",
+    }
     files = []
     for path in root.rglob("*.md"):
         if any(part in ignored for part in path.parts):

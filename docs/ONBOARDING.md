@@ -2,8 +2,8 @@
 title: Onboarding
 tier: meta
 status: living
-updated: 2026-08-16
-audited: 2026-08-16
+updated: 2026-08-17
+audited: 2026-08-17
 related:
   - AGENTS.md
   - docs/NEXT.md
@@ -14,7 +14,7 @@ related:
 
 ## Current Repository State
 
-This is a foundation repository. There is no product app, no selected runtime, no geometry kernel, and no product build command yet.
+The repository contains a Phase 1 React + Vite + TypeScript app under `src/` implementing the Board Mount Designer shell and interactive spike, plus the documentation foundation. No geometry kernel is selected yet, so the generator is an illustrative mock and there is no valid CAD export.
 
 ## First Read
 
@@ -23,7 +23,22 @@ This is a foundation repository. There is no product app, no selected runtime, n
 3. Read [PROJECT_VISION.md](PROJECT_VISION.md).
 4. Read [BOARD_MOUNT_DESIGNER.md](workflows/BOARD_MOUNT_DESIGNER.md).
 
-## Commands That Exist Today
+## App Commands
+
+With Node 20+ and pnpm:
+
+```bash
+pnpm install
+pnpm dev                    # local dev server
+pnpm test                   # host-level unit tests
+pnpm run typecheck
+pnpm run build
+pnpm exec playwright test   # headless browser journey
+```
+
+Playwright uses the environment's pre-installed Chromium; `playwright.config.ts` discovers it under `PLAYWRIGHT_BROWSERS_PATH` and never triggers a download.
+
+## Documentation Commands
 
 Regenerate the documentation map:
 
@@ -45,6 +60,6 @@ python3 -m unittest discover tools/doc-audit/tests
 
 Windows note: use `python` for the same commands if `python3` resolves to the WindowsApps Store shim or is otherwise unavailable.
 
-## Before Starting Product Code
+## Before Extending Beyond The Shell
 
-Resolve or deliberately spike the owner decisions listed in [NEXT.md](NEXT.md), especially project schema, geometry kernel, export formats, image/privacy boundary, and first physical-validation fixture. ADR 0003 already selects the Cadence-adjacent browser-first stack with an Electron-compatible path.
+The app shell is built on the Cadence-adjacent browser-first stack (ADR 0003). Before wiring the deferred features — a real geometry kernel, STEP export, a hardened project file format, camera/skew calibration — resolve or deliberately spike the owner decisions listed in [NEXT.md](NEXT.md) and follow the matching plan under [`docs/plans/`](plans/). Keep new geometry behind the existing `GeometryAdapter` seam and keep unknown values distinct from zero.

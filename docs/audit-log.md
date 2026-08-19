@@ -2,8 +2,8 @@
 title: Audit Log
 tier: record
 status: append-only
-updated: 2026-08-16
-audited: 2026-08-16
+updated: 2026-08-17
+audited: 2026-08-17
 related:
   - docs/AUDIT.md
   - docs/DOC_SPEC.md
@@ -200,6 +200,69 @@ Findings:
 Disposition:
 
 - NEXT still points to the geometry/export spike and STEP/Fusion evidence as the next blocking work.
+- No tech debt recorded.
+- No captured INBOX items recorded.
+
+## 2026-08-17 - Phase 1 app skeleton and interactive spike
+
+Scope: first product code under `src/` (React + Vite + TypeScript Board Mount Designer shell + interactive editor + canonical model + validation + illustrative generator + export pipeline), Playwright e2e, five proposed `docs/plans/` feature plans, doc-audit ignore-list for vendored/build output, README/AGENTS/NEXT/ONBOARDING/HISTORY closeout, regenerated map.
+
+Branch/commit: `claude/app-ui-shell-features-3hg2jc`; base `main` at branch point `43b2dbc`.
+
+Commands:
+
+- `pnpm run typecheck` · `pnpm test` · `pnpm run build` · `pnpm exec playwright test`
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- 26 host-level unit tests pass (units/calibration transform + plausibility rejection, schema load/save + v0→v1 migration + corrupt-file handling, validation severity + export readiness, generation determinism and guards).
+- 6 Playwright cases pass headless against a production build: library seed, theme toggle, sample project auto-generates and enables export, export reaches complete, required-states showcase, and new-project → add reference → reject-then-accept calibration.
+- `tsc -b` typechecks the app and node configs; `vite build` bundles (86 modules).
+- doc-audit tests still pass; the audit now skips `node_modules`/build output and PASSes with one INFO ("product code exists").
+
+Findings:
+
+- ERROR: none after audit.
+- WARN: geometry kernel, STEP/STL export support, hardened project file schema, image/privacy boundary, and repository license remain Proposed; each deferred feature now has a `proposed` plan under `docs/plans/`.
+- INFO: the 3D bracket, generated dimensions, and exported artifacts are illustrative/placeholder — no kernel, no valid STEP body, and no physical fit are claimed. The units toggle stores the unit but the inspector still renders values in millimetres.
+
+Disposition:
+
+- NEXT points to the geometry/export spike (real kernel behind the existing `GeometryAdapter`, then STEP + Fusion evidence) as the next blocking work; the shell is ready for reviewer feedback.
+- No tech debt recorded (the mm-only rendering under the inch toggle is noted here and in NEXT rather than as a TECH_DEBT id).
+- No captured INBOX items recorded.
+
+## 2026-08-17 - Third-party review response
+
+Scope: implemented the six shell-level merge-blockers from an external review of PR #5 — custom-reference import through the canonical store path with error surfacing and two-click bounds-checked calibration; persistence-with-result + explicit save state + corrupt-data recovery key + deep parse validation + honest library copy/controls + durable saved boards; a canonical board-space `generationKey` with recomputed freshness and async-supersede; core domain-validity errors and readiness blockers; `NumberField` single-commit/precision/min-max via a pure `resolveCommit`; and an honest export lifecycle where records are written only on download. No deferred work (kernel, `.mgproj` container, camera/skew, full CI/a11y) was pulled in.
+
+Branch/commit: `claude/app-ui-shell-features-3hg2jc`; follows the Phase 1 spike on the same branch.
+
+Commands:
+
+- `pnpm run typecheck` · `pnpm test` · `pnpm run build` · `pnpm exec playwright test`
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- 60 host-level unit tests pass, including jsdom store tests for QuotaExceededError → error save state, malformed-whole-library and single-malformed-project recovery (survivors kept, corrupt data quarantined), a delayed-adapter generation race proving a stale result is discarded, keep-out shape-change geometry consistency, and export prepared-vs-downloaded-vs-current semantics; plus pure tests for `generationKey` invariants (whole-definition translation stable; outline move / calibration change / distinct same-bbox polygons all change the key), `resolveCommit`, and domain-validity rejections.
+- 9 Playwright cases pass headless against a production build, adding: PNG upload persisted across reload, two-click endpoint-placement calibration (reject then accept), keep-out shape change, and closing the export dialog without downloading not claiming an export.
+- `tsc -b` typechecks; `vite build` bundles; doc-audit PASS; doc-audit tests pass.
+
+Findings:
+
+- ERROR: none after audit.
+- WARN: the deferred decisions (kernel, STEP/Fusion, project file schema, image/privacy, license) remain Proposed with plans under `docs/plans/`.
+- INFO: exported artifacts remain labelled placeholders (no kernel); the inch unit option is intentionally disabled until conversion is wired; circle/polygon keep-outs can be created by shape change but not yet edited numerically.
+
+Disposition:
+
+- The shell is internally correct and no longer claims calibrated/saved/current/exported states it has not established; re-review requested at the updated head.
 - No tech debt recorded.
 - No captured INBOX items recorded.
 
