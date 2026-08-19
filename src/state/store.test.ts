@@ -13,6 +13,7 @@ import { createSampleProject } from "@/core/project/fixtures";
 import { serializeProject, createProject } from "@/core/project/schema";
 import { isCurrentModelExported, isGenerationCurrent } from "@/core/project/derive";
 import { mockGenerator } from "@/core/geometry/mockGenerator";
+import { isKnown } from "@/core/project/value";
 import type { GeometryAdapter } from "@/core/geometry/adapter";
 
 function openSample() {
@@ -25,7 +26,7 @@ beforeEach(() => {
   localStorage.clear();
   __setGeneratorForTest();
   vi.useRealTimers();
-  useStore.setState({ current: null, saveState: "idle", lastSavedAt: null, lastSaveError: null });
+  useStore.setState({ current: null, saveState: "idle", lastSavedAt: null, lastSaveError: null, past: [], future: [] });
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -128,6 +129,61 @@ describe("generation freshness under async races", () => {
     // The result computed from the OLD model must not have been attached.
     expect(useStore.getState().current!.generated ?? null).toBeNull();
     expect(isGenerationCurrent(useStore.getState().current!)).toBe(false);
+  });
+});
+
+describe("undo / redo", () => {
+  it("steps backward and forward through edits and drops redo on a new edit", () => {
+    openSample();
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    const thick = () => {
+      const t = useStore.getState().current!.board.thicknessMm;
+      return isKnown(t) ? t.value : null;
+    };
+
+    useStore.getState().setThicknessMm(2);
+    useStore.getState().setThicknessMm(3);
+    expect(thick()).toBe(3);
+    expect(useStore.getState().past.length).toBe(2);
+
+    useStore.getState().undo();
+    expect(thick()).toBe(2);
+    useStore.getState().undo();
+    expect(thick()).toBe(1.6); // sample's original measured thickness
+    expect(useStore.getState().past.length).toBe(0);
+
+    useStore.getState().redo();
+    expect(thick()).toBe(2);
+
+    // A fresh edit after undo clears the redo stack.
+    useStore.getState().undo(); // back to 1.6
+    useStore.getState().setThicknessMm(5);
+    expect(useStore.getState().future.length).toBe(0);
+    expect(thick()).toBe(5);
+  });
+});
+
+describe("project file import/export", () => {
+  it("round-trips a serialized project back into the library with a fresh id on collision", () => {
+    const p = openSample();
+    const text = serializeProject(useStore.getState().current!);
+    const before = useStore.getState().projects.length;
+    const res = useStore.getState().importProjectFile(text);
+    expect(res.ok).toBe(true);
+    expect(res.id).toBeTruthy();
+    expect(res.id).not.toBe(p.id); // colliding id was reassigned, nothing clobbered
+    expect(useStore.getState().projects.length).toBe(before + 1);
+    expect(useStore.getState().current!.board.holes.length).toBe(4);
+    expect(useStore.getState().route).toEqual({ view: "designer", projectId: res.id });
+  });
+
+  it("rejects a non-project file with a diagnosable error and no library change", () => {
+    openSample();
+    const before = useStore.getState().projects.length;
+    const res = useStore.getState().importProjectFile("{not a project");
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/INVALID_JSON|not/i);
+    expect(useStore.getState().projects.length).toBe(before);
   });
 });
 

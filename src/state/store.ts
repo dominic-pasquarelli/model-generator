@@ -9,7 +9,7 @@ import type { Point, Rect } from "@/core/geom";
 import { bbox, normalizeRect } from "@/core/geom";
 import { boardFrame, boardMmToPxPoint, generationKey, isGenerationCurrent } from "@/core/project/derive";
 import { createSeedLibrary } from "@/core/project/fixtures";
-import { createProject, parseProjectFile } from "@/core/project/schema";
+import { createProject, parseProjectFile, serializeProject, MgFileError } from "@/core/project/schema";
 import type {
   BoardSide,
   CalibrationSourceKind,
@@ -303,6 +303,9 @@ function projectCenterPx(project: Project): Point {
   return { x: w / 2, y: h / 2 };
 }
 
+/** Snapshots of the open project for undo/redo. Reset when a different project opens. */
+const HISTORY_LIMIT = 60;
+
 export interface AppState {
   theme: Theme;
   route: Route;
@@ -310,6 +313,11 @@ export interface AppState {
   current: Project | null;
   ui: DesignerUi;
   savedBoards: SavedBoardDefinition[];
+  /** Past/future project snapshots for undo/redo (current project only). */
+  past: Project[];
+  future: Project[];
+  undo: () => void;
+  redo: () => void;
   /** Explicit persistence state — "saved" only after a confirmed successful write. */
   saveState: SaveState;
   lastSavedAt: number | null;
@@ -375,6 +383,16 @@ export interface AppState {
 
   // persistence
   saveBoardToLibrary: () => PersistResult;
+  /** Serialise and download the open (or given) project as a portable .mgproj file. */
+  downloadProjectFile: (id?: string) => void;
+  /** Parse a .mgproj file's text, add it to the library (fresh id on collision), open it. */
+  importProjectFile: (text: string) => ImportResult;
+}
+
+export interface ImportResult {
+  ok: boolean;
+  error?: string;
+  id?: string;
 }
 
 export interface ReferenceInput {
@@ -428,12 +446,15 @@ export const useStore = create<AppState>((set, get) => {
   function mutate(mutator: (p: Project) => void): PersistResult {
     const current = get().current;
     if (!current) return { ok: false, error: "No open project" };
+    const snapshot = structuredClone(current) as Project;
     const next = structuredClone(current) as Project;
     mutator(next);
     next.version += 1;
     next.updatedAt = Date.now();
     const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
-    const res = commit(projectsNext, { current: next });
+    // Record the pre-edit snapshot for undo; a fresh edit clears the redo stack.
+    const pastNext = [...get().past, snapshot].slice(-HISTORY_LIMIT);
+    const res = commit(projectsNext, { current: next, past: pastNext, future: [] });
     if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
     return res;
   }
@@ -459,11 +480,34 @@ export const useStore = create<AppState>((set, get) => {
     current: null,
     ui: freshDesignerUi(createProject()),
     savedBoards,
+    past: [],
+    future: [],
     saveState: "idle",
     lastSavedAt: null,
     lastSaveError: null,
     cursor: null,
     setCursor: (p) => set({ cursor: p }),
+
+    undo: () => {
+      const past = get().past;
+      const current = get().current;
+      if (past.length === 0 || !current) return;
+      const prev = past[past.length - 1];
+      const futureNext = [...get().future, structuredClone(current) as Project].slice(-HISTORY_LIMIT);
+      const projectsNext = get().projects.map((p) => (p.id === prev.id ? prev : p));
+      commit(projectsNext, { current: prev, past: past.slice(0, -1), future: futureNext });
+      if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
+    },
+    redo: () => {
+      const future = get().future;
+      const current = get().current;
+      if (future.length === 0 || !current) return;
+      const nextState = future[future.length - 1];
+      const pastNext = [...get().past, structuredClone(current) as Project].slice(-HISTORY_LIMIT);
+      const projectsNext = get().projects.map((p) => (p.id === nextState.id ? nextState : p));
+      commit(projectsNext, { current: nextState, past: pastNext, future: future.slice(0, -1) });
+      if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
+    },
 
     toggleTheme: () => {
       const t: Theme = get().theme === "dark" ? "light" : "dark";
@@ -484,7 +528,7 @@ export const useStore = create<AppState>((set, get) => {
       const project = get().projects.find((p) => p.id === id);
       if (!project) return;
       stopExportTimer();
-      set({ current: project, route: { view: "designer", projectId: id }, ui: freshDesignerUi(project) });
+      set({ current: project, route: { view: "designer", projectId: id }, ui: freshDesignerUi(project), past: [], future: [] });
       if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
     },
 
@@ -496,6 +540,8 @@ export const useStore = create<AppState>((set, get) => {
         current: project,
         route: { view: "designer", projectId: project.id },
         ui: freshDesignerUi(project),
+        past: [],
+        future: [],
       });
     },
 
@@ -884,8 +930,54 @@ export const useStore = create<AppState>((set, get) => {
       set({ savedBoards: boardsNext });
       return res;
     },
+
+    downloadProjectFile: (id) => {
+      const project = id ? get().projects.find((p) => p.id === id) : get().current;
+      if (!project) return;
+      const safe = project.name.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase() || "project";
+      downloadTextFile(`${safe}_v${project.version}.mgproj`, serializeProject(project), "application/json");
+    },
+
+    importProjectFile: (text) => {
+      let project: Project;
+      try {
+        project = parseProjectFile(text).project;
+      } catch (e) {
+        const msg =
+          e instanceof MgFileError
+            ? `${e.code}: ${e.message}`
+            : "This file could not be read as a Model Generator project.";
+        return { ok: false, error: msg };
+      }
+      // Import is always additive: a colliding id gets a fresh one so nothing is clobbered.
+      if (get().projects.some((p) => p.id === project.id)) project = { ...project, id: uid("proj") };
+      const projectsNext = [project, ...get().projects];
+      const res = commit(projectsNext, {
+        current: project,
+        route: { view: "designer", projectId: project.id },
+        ui: freshDesignerUi(project),
+        past: [],
+        future: [],
+      });
+      if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
+      return { ok: res.ok, ...(res.ok ? {} : { error: res.error }), id: project.id };
+    },
   };
 });
+
+/** Trigger a browser download of a text file (Blob + object URL). */
+export function downloadTextFile(name: string, text: string, type = "text/plain") {
+  if (typeof document === "undefined") return;
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 /** Convert a board-mm point to image-pixel space using the current project frame. */
 export function boardMmToImage(project: Project, mm: Point): Point | null {

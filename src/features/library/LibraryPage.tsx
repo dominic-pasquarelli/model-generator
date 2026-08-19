@@ -1,3 +1,4 @@
+import { useRef, useState } from "react";
 import { Icon } from "@/icons/Icon";
 import { Badge } from "@/components/ui/Badge";
 import { Button, IconButton } from "@/components/ui/Button";
@@ -65,6 +66,22 @@ export function LibraryPage() {
   const savedBoards = useStore((s) => s.savedBoards);
   const newProject = useStore((s) => s.newProject);
   const goStates = useStore((s) => s.goStates);
+  const importProjectFile = useStore((s) => s.importProjectFile);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const [importError, setImportError] = useState<string | null>(null);
+
+  const onOpenFile = (files: FileList | null) => {
+    setImportError(null);
+    const file = files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onerror = () => setImportError("Could not read the file.");
+    reader.onload = () => {
+      const res = importProjectFile(String(reader.result));
+      if (!res.ok) setImportError(res.error ?? "This file is not a valid project.");
+    };
+    reader.readAsText(file);
+  };
 
   const right = (
     <>
@@ -85,7 +102,14 @@ export function LibraryPage() {
               <div className="sub">Browser-local drafts on this device</div>
             </div>
             <div className="actions">
-              <Button icon="folder" disabled title="Opening project files is planned — persistence is browser-local for now">
+              <input
+                ref={fileInput}
+                type="file"
+                accept=".mgproj,application/json,.json"
+                style={{ display: "none" }}
+                onChange={(e) => onOpenFile(e.target.files)}
+              />
+              <Button icon="folder" title="Open a .mgproj project file from disk" onClick={() => fileInput.current?.click()}>
                 Open project…
               </Button>
               <Button icon="plus" variant="primary" onClick={() => newProject()}>
@@ -93,6 +117,14 @@ export function LibraryPage() {
               </Button>
             </div>
           </div>
+          {importError ? (
+            <div
+              role="alert"
+              style={{ margin: "0 0 14px", fontSize: 12, color: "#ffb4a8", background: "#43231f", border: "1px solid #7a3830", borderRadius: 8, padding: "9px 12px" }}
+            >
+              {importError}
+            </div>
+          ) : null}
 
           <div className="pcards">
             {projects.map((p) => (
@@ -177,8 +209,8 @@ export function LibraryPage() {
           <div className="localstrip">
             <Icon name="lock" />
             <div>
-              <b>Local-first.</b> Projects are drafts stored in this browser (no server, account, sync, or upload).
-              Durable project files are a planned step.
+              <b>Local-first.</b> Projects live in this browser (no server, account, sync, or upload). Save any project
+              to a portable <span className="mono">.mgproj</span> file, and open one here to bring it back.
             </div>
           </div>
         </div>
