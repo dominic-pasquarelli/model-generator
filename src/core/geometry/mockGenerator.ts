@@ -9,7 +9,10 @@ import { bbox, rectIntersectsCircle, circlesOverlap, type Point } from "@/core/g
 import { boardFrame, generationKey, outlineDims, standoffSeatRadiusPx } from "@/core/project/derive";
 import type { GeneratedDimensions, GeneratedModel, KeepOut, Project } from "@/core/project/types";
 import { maybe } from "@/core/project/value";
-import { ACTIVE_ADAPTER_VERSION, type GenerateResult, type GeometryAdapter } from "./adapter";
+import type { GenerateResult, GeometryAdapter } from "./adapter";
+
+/** The mock's own identity, independent of the production adapter version. */
+const MOCK_ADAPTER_NAME = "illustrative-mock@1";
 
 const WALL_MM = 3; // Illustrative wall/margin around the board footprint.
 
@@ -62,7 +65,7 @@ export function computeWarnings(project: Project): string[] {
 }
 
 export const mockGenerator: GeometryAdapter = {
-  name: ACTIVE_ADAPTER_VERSION,
+  name: MOCK_ADAPTER_NAME,
   capabilities: { exactSolid: false, previewMesh: false },
   async generate(project: Project, signal?: AbortSignal): Promise<GenerateResult> {
     if (signal?.aborted) return { ok: false, error: { code: "ABORTED", message: "Generation cancelled." } };

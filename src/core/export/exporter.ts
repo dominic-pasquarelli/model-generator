@@ -1,93 +1,103 @@
 /**
- * Export pipeline (shell scope). Readiness gating and the metadata sidecar are real
- * and honest. Producing a valid STEP/STL body needs the geometry kernel, which is not
- * selected yet (ADR 0006 / STEP_EXPORT_PLAN) — so this build writes a real metadata
- * sidecar and a clearly-labelled placeholder artifact instead of claiming a CAD solid.
- * The export contract, Fusion evidence gate, and true STEP writer are the deferred plan.
+ * Export pipeline. Readiness gating and the metadata sidecar remain real and honest;
+ * the artifact body is now a REAL generated solid, not a placeholder. STL is a
+ * watertight print mesh; STEP is a faceted B-rep (curved faces approximated as facets).
+ * Both are tessellations of the same solid the preview consumes (shared geometry path).
+ *
+ * Honesty boundary that still holds: the artifacts are host-level verified (closed
+ * manifold, valid ISO-10303-21 structure), but Autodesk Fusion import and printed-part
+ * fit are NOT yet verified. Those remain the evidence gates owned by ADR 0006.
  */
+import { buildBracketMesh } from "@/core/geometry/mesh";
+import { ACTIVE_ADAPTER_VERSION } from "@/core/geometry/adapter";
 import { GENERATOR_VERSION } from "@/core/project/types";
 import type { ExportFormat, ExportRecord, Project } from "@/core/project/types";
 import { isKnown } from "@/core/project/value";
 import { exportReadiness, type ExportReadiness } from "@/core/validation/validate";
 import { uid } from "@/lib/id";
+import { meshToAsciiStl } from "./stl";
+import { meshToStep } from "./step";
 
 export interface ExportMetadata {
   tool: "board-mount-designer";
   generator: string;
+  /** Provenance of the geometry path — the self-contained solid generator. */
+  kernel: string;
   schemaVersion: number;
   units: Project["units"];
   project: { id: string; name: string; version: number };
   paramsHash: string | null;
   format: ExportFormat;
+  /** What kind of geometry this artifact carries. */
+  geometry: "faceted-brep" | "mesh";
   generatedDimensionsMm: { width: number; depth: number; height: number } | null;
   bodyCount: number | null;
   standoffCount: number | null;
+  triangleCount: number | null;
   calibration: { pxPerMm: number; knownMm: number | null; source: string } | null;
   warnings: string[];
-  notCadSolid: true;
   note: string;
+  /** Claims deliberately NOT made — recorded so downstream never over-reads the file. */
+  unsupportedClaims: string[];
   createdAtIso: string;
 }
 
 const HONEST_NOTE =
-  "This build ships an illustrative generator; the artifact is NOT a validated CAD solid. " +
-  "A real STEP body and Fusion import evidence are pending kernel selection (see STEP_EXPORT_PLAN / ADR 0006).";
+  "Real generated solid from the canonical model. STL is a watertight print mesh; STEP is a faceted B-rep " +
+  "(curved standoff walls and bores are facets, not analytic surfaces). Verified host-level (closed manifold, " +
+  "valid ISO-10303-21 structure). Autodesk Fusion import and printed-part fit are NOT yet verified (ADR 0006).";
+
+const UNSUPPORTED_CLAIMS = [
+  "fusion-import-not-yet-verified",
+  "no-analytic-curved-surfaces-in-step",
+  "printed-part-fit-unverified",
+  "no-parametric-editability-in-fusion",
+];
 
 export function exportFileName(project: Project, format: ExportFormat): string {
   const safe = project.name.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase();
   return `${safe}_v${project.version}.${format}`;
 }
 
-export function buildMetadata(project: Project, format: ExportFormat, nowIso: string): ExportMetadata {
+function safeProductName(project: Project): string {
+  return project.name.replace(/[^a-z0-9-_]+/gi, "_").toLowerCase() || "board_mount";
+}
+
+export function buildMetadata(
+  project: Project,
+  format: ExportFormat,
+  geom: { dims: { widthMm: number; depthMm: number; heightMm: number }; bodyCount: number; triangleCount: number } | null,
+  nowIso: string,
+): ExportMetadata {
   const gen = project.generated;
   const cal = project.calibration;
   return {
     tool: "board-mount-designer",
     generator: GENERATOR_VERSION,
+    kernel: `${ACTIVE_ADAPTER_VERSION} (self-contained faceted solid)`,
     schemaVersion: project.schemaVersion,
     units: project.units,
     project: { id: project.id, name: project.name, version: project.version },
     paramsHash: gen?.paramsHash ?? null,
     format,
-    generatedDimensionsMm: gen ? { width: gen.dims.widthMm, depth: gen.dims.depthMm, height: gen.dims.heightMm } : null,
-    bodyCount: gen?.dims.bodies ?? null,
+    geometry: format === "step" ? "faceted-brep" : "mesh",
+    generatedDimensionsMm: geom ? { width: geom.dims.widthMm, depth: geom.dims.depthMm, height: geom.dims.heightMm } : null,
+    bodyCount: geom?.bodyCount ?? gen?.dims.bodies ?? null,
     standoffCount: gen?.dims.standoffCount ?? null,
+    triangleCount: geom?.triangleCount ?? gen?.dims.triangles ?? null,
     calibration:
       cal && cal.status === "valid" && cal.pxPerMm != null
         ? { pxPerMm: cal.pxPerMm, knownMm: isKnown(cal.knownMm) ? cal.knownMm.value : null, source: cal.source }
         : null,
     warnings: gen?.warnings ?? [],
-    notCadSolid: true,
     note: HONEST_NOTE,
+    unsupportedClaims: UNSUPPORTED_CLAIMS,
     createdAtIso: nowIso,
   };
 }
 
 export function serializeSidecar(meta: ExportMetadata): string {
   return JSON.stringify(meta, null, 2);
-}
-
-/**
- * The placeholder artifact body. For STEP we emit a minimal ISO-10303-21 HEADER with
- * an explicit comment that no geometry section is present — importable-but-empty is
- * honest; a fake solid would not be.
- */
-export function buildPlaceholderArtifact(project: Project, format: ExportFormat, meta: ExportMetadata): string {
-  if (format === "step") {
-    return [
-      "ISO-10303-21;",
-      "HEADER;",
-      `FILE_DESCRIPTION(('Model Generator placeholder — NO geometry section','${HONEST_NOTE}'),'2;1');`,
-      `FILE_NAME('${exportFileName(project, "step")}','${meta.createdAtIso}',('Model Generator'),(''),'${GENERATOR_VERSION}','','');`,
-      "FILE_SCHEMA(('AUTOMOTIVE_DESIGN'));",
-      "ENDSEC;",
-      "/* No DATA section: a real solid requires the geometry kernel (STEP_EXPORT_PLAN). */",
-      "END-ISO-10303-21;",
-      "",
-    ].join("\n");
-  }
-  // STL placeholder — a valid empty solid, clearly named.
-  return ["solid model_generator_placeholder", "endsolid model_generator_placeholder", ""].join("\n");
 }
 
 export interface ExportArtifact {
@@ -114,10 +124,44 @@ export function buildExport(project: Project, options: ExportOptions): BuildExpo
   const readiness = exportReadiness(project);
   if (!readiness.ready) return { ok: false, readiness };
 
+  // The readiness gate guarantees the solid can be built; treat a failure here as a hard,
+  // diagnosable blocker rather than writing an empty file.
+  const meshResult = buildBracketMesh(project);
+  if (!meshResult.ok) {
+    return {
+      ok: false,
+      readiness: {
+        ready: false,
+        blockers: [
+          {
+            id: "geometry-build-failed",
+            severity: "error",
+            title: "Solid could not be built",
+            body: `${meshResult.error.code}: ${meshResult.error.message}`,
+          },
+        ],
+        checklist: readiness.checklist,
+      },
+    };
+  }
+  const mesh = meshResult.mesh;
+
   const nowIso = options.nowIso ?? new Date(options.now ?? Date.now()).toISOString();
   const now = options.now ?? Date.now();
-  const meta = buildMetadata(project, options.format, nowIso);
-  const body = buildPlaceholderArtifact(project, options.format, meta);
+  const geom = { dims: meshResult.dims, bodyCount: mesh.bodies.length, triangleCount: mesh.triangleCount };
+  const meta = buildMetadata(project, options.format, geom, nowIso);
+
+  const body =
+    options.format === "step"
+      ? meshToStep(mesh, {
+          productName: safeProductName(project),
+          author: "Model Generator",
+          organization: "local",
+          createdIso: nowIso,
+          originatingSystem: GENERATOR_VERSION,
+        })
+      : meshToAsciiStl(mesh, safeProductName(project));
+
   const sidecar = options.writeSidecar ? serializeSidecar(meta) : null;
   const fileName = exportFileName(project, options.format);
   const record: ExportRecord = {

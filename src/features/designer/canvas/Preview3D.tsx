@@ -1,4 +1,3 @@
-import { BRACKET_ISO_SRC } from "@/assets";
 import { cn } from "@/lib/cn";
 import { Icon } from "@/icons/Icon";
 import { Button } from "@/components/ui/Button";
@@ -7,6 +6,7 @@ import type { Project } from "@/core/project/types";
 import { isGenerationCurrent } from "@/core/project/derive";
 import { clock } from "@/lib/format";
 import { useStore, type DesignerUi } from "@/state/store";
+import { MeshView3D } from "./MeshView3D";
 
 const VIEWS: DesignerUi["view3d"][] = ["iso", "top", "front", "fit"];
 const VIEW_LABEL: Record<DesignerUi["view3d"], string> = { iso: "Iso", top: "Top", front: "Front", fit: "Fit" };
@@ -41,18 +41,7 @@ export function Preview3D({ project }: { project: Project }) {
       </div>
 
       {gen ? (
-        <img
-          src={BRACKET_ISO_SRC}
-          alt="Illustrative generated bracket"
-          style={{
-            position: "absolute",
-            left: "50%",
-            top: "52%",
-            transform: `translate(-50%, -50%) scale(${view3d === "fit" ? 1.05 : 1})`,
-            width: 560,
-            maxWidth: "82%",
-          }}
-        />
+        <MeshView3D project={project} view={view3d} />
       ) : (
         <div
           style={{
@@ -77,7 +66,7 @@ export function Preview3D({ project }: { project: Project }) {
             <b>Bracket</b>·plate + standoffs · {gen.dims.widthMm} × {gen.dims.depthMm} × {gen.dims.heightMm} mm
           </div>
           <div className="cv-pill" style={{ right: 14, top: 152 }}>
-            {gen.dims.standoffCount} standoffs · {project.mount.fastener} · illustrative
+            {gen.dims.standoffCount} standoffs · {project.mount.fastener} · {gen.dims.bodies} bodies · {gen.dims.triangles.toLocaleString()} △
           </div>
           {clipWarning ? (
             <div className="cv-pill" style={{ left: 16, bottom: 92, background: "#332809cc", borderColor: "#8f6d24", color: "#f5d78e" }}>

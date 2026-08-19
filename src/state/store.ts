@@ -27,13 +27,15 @@ import type { Unit } from "@/core/units/units";
 import type { StepId } from "@/core/validation/validate";
 import { blockingErrors, validateProject } from "@/core/validation/validate";
 import { mockGenerator } from "@/core/geometry/mockGenerator";
+import { solidGenerator } from "@/core/geometry/solidGenerator";
 import type { GeometryAdapter } from "@/core/geometry/adapter";
 import { buildExport, type ExportArtifact } from "@/core/export/exporter";
 import { uid } from "@/lib/id";
 
-// The active geometry adapter. A test seam lets a delayed adapter be injected to
-// exercise generation superseding without touching production behavior.
-let activeGenerator: GeometryAdapter = mockGenerator;
+// The active geometry adapter — the real self-contained solid generator in production.
+// A test seam lets a delayed or mock adapter be injected to exercise generation
+// superseding and to isolate store logic from geometry.
+let activeGenerator: GeometryAdapter = solidGenerator;
 /** @internal test-only: swap the adapter (pass nothing to reset to the mock). */
 export function __setGeneratorForTest(gen?: GeometryAdapter) {
   activeGenerator = gen ?? mockGenerator;
@@ -804,9 +806,9 @@ export const useStore = create<AppState>((set, get) => {
       const current = get().current;
       if (!current) return;
       const projectId = current.id; // finalize must apply to THIS project, not whatever is current later
-      // Honest placeholder stages — no fake kernel boolean work, no fixed hole counts.
-      const stages = ["Validating current generation", "Preparing labelled placeholder artifact"];
-      if (get().ui.export.writeSidecar) stages.push("Preparing metadata sidecar");
+      // Honest stages reflecting real work: build the solid, serialise the body, sidecar.
+      const stages = ["Building solid from the canonical model", `Serialising ${get().ui.export.format.toUpperCase()} body`];
+      if (get().ui.export.writeSidecar) stages.push("Writing metadata sidecar");
       let i = 0;
       stopExportTimer();
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "progress", progress: 4, stage: stages[0] } } }));

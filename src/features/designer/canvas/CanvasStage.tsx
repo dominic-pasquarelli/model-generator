@@ -1,5 +1,4 @@
 import { cn } from "@/lib/cn";
-import { BRACKET_ISO_SRC } from "@/assets";
 import { Icon } from "@/icons/Icon";
 import { Kbd } from "@/components/ui/Badge";
 import type { Project } from "@/core/project/types";
@@ -10,6 +9,7 @@ import { CanvasToolbar, StatusBar, ZoomControl } from "./chrome";
 import { EmptyState } from "./EmptyState";
 import { Viewport2D } from "./Viewport2D";
 import { Preview3D } from "./Preview3D";
+import { MeshView3D } from "./MeshView3D";
 import { CalibrationPopover } from "../dialogs/CalibrationPopover";
 import { ExportDialog } from "../dialogs/ExportDialog";
 
@@ -138,11 +138,7 @@ export function CanvasStage({ project }: { project: Project }) {
 
         {mode === "export3d" ? (
           <>
-            <img
-              src={BRACKET_ISO_SRC}
-              alt="Illustrative generated bracket"
-              style={{ position: "absolute", left: "50%", top: "46%", transform: "translate(-50%,-50%)", width: 560, maxWidth: "70%", opacity: 0.95 }}
-            />
+            {project.generated ? <MeshView3D project={project} view="fit" /> : null}
             <ExportDialog project={project} />
           </>
         ) : null}

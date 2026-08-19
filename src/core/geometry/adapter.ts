@@ -12,7 +12,7 @@ import type { GeneratedModel, Project } from "@/core/project/types";
  * key: swapping the adapter (or bumping its behavior) invalidates prior results, so a
  * stale generation cannot be trusted across a generator change.
  */
-export const ACTIVE_ADAPTER_VERSION = "illustrative-mock@1" as const;
+export const ACTIVE_ADAPTER_VERSION = "mesh-solid@1" as const;
 
 export interface GeometryError {
   /** Diagnosable code — never a bare "failed". */
@@ -28,10 +28,12 @@ export type GenerateResult =
   | { ok: false; error: GeometryError };
 
 export interface GeometryCapabilities {
-  /** True only when the adapter can emit an exact solid suitable for STEP. */
+  /** True only when the adapter can emit an exact ANALYTIC solid (true B-rep) for STEP. */
   exactSolid: boolean;
-  /** True when the adapter can produce a preview mesh. */
+  /** True when the adapter can produce a real preview/print mesh. */
   previewMesh: boolean;
+  /** True when the adapter can emit a real FACETED B-rep STEP (curved faces as facets). */
+  facetedStep?: boolean;
 }
 
 export interface GeometryAdapter {
