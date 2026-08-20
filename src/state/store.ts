@@ -987,15 +987,29 @@ export const useStore = create<AppState>((set, get) => {
       // Import is always additive: a colliding id gets a fresh one so nothing is clobbered.
       if (get().projects.some((p) => p.id === project.id)) project = { ...project, id: uid("proj") };
       const projectsNext = [project, ...get().projects];
-      const res = commit(projectsNext, {
+      // Transactional (reviewer #5): persist FIRST, and only open/route to the imported
+      // project when the write succeeds. A quota failure must never leave the user editing an
+      // apparently-imported project that was never made durable — it stays on the library
+      // screen with a visible error instead.
+      const res = persistLibrary(projectsNext);
+      if (!res.ok) {
+        // Do not add the non-durable project to the in-memory list or route to it.
+        set({ saveState: "error", lastSaveError: res.error ?? "Save failed" });
+        return { ok: false, error: res.error ?? "Could not save the imported project — storage may be full.", id: project.id };
+      }
+      set({
+        projects: projectsNext,
         current: project,
         route: { view: "designer", projectId: project.id },
         ui: freshDesignerUi(project),
         past: [],
         future: [],
+        saveState: "saved",
+        lastSavedAt: Date.now(),
+        lastSaveError: null,
       });
       if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
-      return { ok: res.ok, ...(res.ok ? {} : { error: res.error }), id: project.id };
+      return { ok: true, id: project.id };
     },
   };
 });

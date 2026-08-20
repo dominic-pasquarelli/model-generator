@@ -5,9 +5,26 @@
  * (ADR 0007). Corrupt files fail with a diagnosable error, never silent defaults.
  */
 import { uid } from "@/lib/id";
+import { assessCalibration } from "@/core/units/units";
+import { isSimpleRing, ringArea, type Pt } from "@/core/geometry/poly2d";
 import type { MountStrategy, Project } from "./types";
 import { GENERATOR_VERSION, SCHEMA_VERSION } from "./types";
 import { inferred, unknownVal } from "./value";
+
+// Resource + magnitude bounds for the untrusted import boundary (reviewer #5). A file (or
+// any collection/coordinate/string within it) beyond these is rejected before geometry or
+// persistence work begins, so a hostile or corrupt file cannot exhaust memory or drive the
+// generator with absurd inputs.
+const MAX_FILE_BYTES = 12_000_000;
+const MAX_COORD = 1_000_000; // px magnitude for any stored coordinate
+const MAX_HOLES = 1_000;
+const MAX_KEEPOUTS = 1_000;
+const MAX_EXPORTS = 5_000;
+const MAX_RING_VERTICES = 5_000;
+const MAX_STRING = 8_192;
+const MAX_REF_SRC_BYTES = 12_000_000;
+/** Relative tolerance when re-deriving the calibration scale from the anchors on import. */
+const PX_PER_MM_REL_TOL = 1e-3;
 
 export interface ProjectFile {
   schemaVersion: number;
@@ -93,11 +110,28 @@ export const MIGRATIONS: Migration[] = [
     from: 0,
     to: 1,
     migrate: (raw) => {
+      // v0 is a pre-mount-strategy file. Graft today's default mount and fill every other
+      // now-required top-level field deterministically, so a genuine v0 file opens all the
+      // way through parseProjectFile (reviewer #5) rather than tripping shape validation.
       const project = (raw.project ?? {}) as Record<string, unknown>;
       if (!project.mount) project.mount = defaultMount();
       if (project.version == null) project.version = 1;
+      if (project.units == null) project.units = "mm";
+      if (project.createdAt == null) project.createdAt = 0;
+      if (project.updatedAt == null) project.updatedAt = 0;
       if (project.generatorVersion == null) project.generatorVersion = GENERATOR_VERSION;
+      if (project.generated === undefined) project.generated = null;
+      if (project.reference === undefined) project.reference = null;
+      if (project.calibration === undefined) project.calibration = null;
       if (!Array.isArray(project.exports)) project.exports = [];
+      const board = (project.board ?? {}) as Record<string, unknown>;
+      if (board.name == null) board.name = "";
+      if (board.revision == null) board.revision = "";
+      if (board.thicknessMm == null) board.thicknessMm = unknownVal<number>();
+      if (board.outline === undefined) board.outline = null;
+      if (!Array.isArray(board.holes)) board.holes = [];
+      if (!Array.isArray(board.keepOuts)) board.keepOuts = [];
+      project.board = board;
       project.schemaVersion = 1;
       return { ...raw, schemaVersion: 1, project };
     },
@@ -140,6 +174,9 @@ export function migrateData(raw: Record<string, unknown>): Record<string, unknow
 
 /** Parse a project file's text, migrating as needed. Throws MgFileError on corruption. */
 export function parseProjectFile(text: string): ProjectFile {
+  if (text.length > MAX_FILE_BYTES) {
+    throw new MgFileError("FILE_TOO_LARGE", `Project file is ${text.length} bytes, larger than the ${MAX_FILE_BYTES}-byte limit.`);
+  }
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -149,17 +186,18 @@ export function parseProjectFile(text: string): ProjectFile {
   if (!raw || typeof raw !== "object") {
     throw new MgFileError("NOT_AN_OBJECT", "Project file root is not an object.");
   }
-  const migrated = migrateData(raw as Record<string, unknown>);
+  // Check the RAW schema markers BEFORE migrating (reviewer #5): a v0 migration would
+  // normalise a project marker and erase the evidence of a top-level/project disagreement.
+  const rawObj = raw as Record<string, unknown>;
+  const rawTopV = rawObj.schemaVersion;
+  const rawProjV = (rawObj.project as Record<string, unknown> | undefined)?.schemaVersion;
+  if (typeof rawTopV === "number" && typeof rawProjV === "number" && rawTopV !== rawProjV) {
+    throw new MgFileError("SCHEMA_MISMATCH", `Top-level schema v${rawTopV} does not match project schema v${rawProjV}.`);
+  }
+  const migrated = migrateData(rawObj);
   const project = migrated.project as Project | undefined;
   if (!project || typeof project !== "object") {
     throw new MgFileError("MISSING_PROJECT", "Project file has no `project` payload.");
-  }
-  // When both are present they must agree — a top-level/project schema-version mismatch
-  // is a corrupt or hand-edited file, not a migratable one.
-  const topV = (migrated as Record<string, unknown>).schemaVersion;
-  const projV = (project as unknown as Record<string, unknown>).schemaVersion;
-  if (typeof topV === "number" && typeof projV === "number" && topV !== projV) {
-    throw new MgFileError("SCHEMA_MISMATCH", `Top-level schema v${topV} does not match project schema v${projV}.`);
   }
   validateProjectShape(project as unknown as Record<string, unknown>);
   return { schemaVersion: SCHEMA_VERSION, project };
@@ -182,11 +220,62 @@ function isStr(v: unknown): v is string {
 function isBool(v: unknown): v is boolean {
   return typeof v === "boolean";
 }
-function isPoint(v: unknown): boolean {
-  return isObj(v) && isNum(v.x) && isNum(v.y);
+function inBounds(n: unknown): n is number {
+  return isNum(n) && Math.abs(n) <= MAX_COORD;
+}
+/** A point whose coordinates are finite AND within the magnitude bound. */
+function isPointB(v: unknown): boolean {
+  return isObj(v) && inBounds(v.x) && inBounds(v.y);
 }
 function isRect(v: unknown): boolean {
-  return isObj(v) && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h);
+  return isObj(v) && inBounds(v.x) && inBounds(v.y) && inBounds(v.w) && inBounds(v.h);
+}
+/** A string present and within the length bound (defends against pathological blobs). */
+function isBoundedStr(v: unknown): v is string {
+  return isStr(v) && v.length <= MAX_STRING;
+}
+/** A non-negative finite number (sizes, counts, timestamps). */
+function isNonNeg(v: unknown): v is number {
+  return isNum(v) && v >= 0;
+}
+/** A positive integer (versions). */
+function isPosInt(v: unknown): v is number {
+  return isNum(v) && Number.isInteger(v) && v > 0;
+}
+/** A simple, bounded, non-zero-area ring of 3..MAX_RING_VERTICES points. */
+function isValidRing(v: unknown, path: string): void {
+  req(Array.isArray(v) && v.length >= 3 && v.length <= MAX_RING_VERTICES, `${path} (vertex count)`);
+  const arr = v as unknown[];
+  req(arr.every(isPointB), `${path} (finite, in-bounds points)`);
+  const ring = arr as Pt[];
+  req(isSimpleRing(ring), `${path} (self-intersecting or degenerate ring)`);
+  req(Math.abs(ringArea(ring)) > 1e-6, `${path} (zero-area ring)`);
+}
+
+/**
+ * An imported reference `src` must be a raster data URL or an app-relative asset path — NOT
+ * a remote/other scheme (reviewer #5). The canvas passes this straight to <img src>, so an
+ * `https:`/`//` value would fire an off-origin request, breaking the local-only posture.
+ */
+function isSafeReferenceSrc(v: unknown): boolean {
+  if (!isStr(v) || v.length === 0 || v.length > MAX_REF_SRC_BYTES) return false;
+  if (/^data:image\/(png|jpe?g|webp|gif|bmp|avif);base64,[A-Za-z0-9+/=\s]+$/i.test(v)) return true;
+  // Anything carrying an explicit scheme, or protocol-relative, or a parent-dir escape, is out.
+  if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return false; // has a URI scheme (http:, file:, data:svg, javascript:, ...)
+  if (v.startsWith("//")) return false; // protocol-relative
+  if (v.includes("..")) return false; // path traversal
+  // App-relative asset path (bundled under the app origin).
+  return /^\/?[A-Za-z0-9._\-/]+$/.test(v);
+}
+
+function assertUniqueIds(items: { id?: unknown }[], path: string): void {
+  const seen = new Set<string>();
+  for (let i = 0; i < items.length; i++) {
+    const id = items[i].id;
+    req(isStr(id), `${path}[${i}].id`);
+    req(!seen.has(id as string), `${path}[${i}].id (duplicate id)`);
+    seen.add(id as string);
+  }
 }
 
 // Canonical enum vocabularies (kept in sync with types.ts). A file carrying any value
@@ -225,8 +314,8 @@ function req(cond: boolean, path: string): void {
 function validateHole(h: unknown, path: string): void {
   req(isObj(h), path);
   const hole = h as Record<string, unknown>;
-  req(isStr(hole.id) && isStr(hole.label), `${path}.id/label`);
-  req(isPoint(hole.centerPx), `${path}.centerPx`);
+  req(isBoundedStr(hole.id) && isBoundedStr(hole.label), `${path}.id/label`);
+  req(isPointB(hole.centerPx), `${path}.centerPx`);
   req(isValNum(hole.diameterMm), `${path}.diameterMm`);
   req(isEnum(hole.fastener, FASTENERS), `${path}.fastener`);
   req(isEnum(hole.positionSource, HOLE_POSITIONS), `${path}.positionSource`);
@@ -236,17 +325,24 @@ function validateHole(h: unknown, path: string): void {
 function validateKeepOut(k: unknown, path: string): void {
   req(isObj(k), path);
   const ko = k as Record<string, unknown>;
-  req(isStr(ko.id) && isStr(ko.label) && isStr(ko.purpose), `${path}.id/label/purpose`);
+  req(isBoundedStr(ko.id) && isBoundedStr(ko.label) && isBoundedStr(ko.purpose), `${path}.id/label/purpose`);
   req(isEnum(ko.shape, KEEPOUT_SHAPES), `${path}.shape`);
   req(isEnum(ko.boardSide, BOARD_SIDES), `${path}.boardSide`);
   req(isValNum(ko.clearanceHeightMm), `${path}.clearanceHeightMm`);
   req(isEnum(ko.state, SOURCES), `${path}.state`);
-  // The discriminator and the populated payload must agree — a "rect" with only a
-  // circlePx would otherwise slip past generation/validation.
-  if (ko.shape === "rect") req(isRect(ko.rectPx), `${path}.rectPx`);
-  else if (ko.shape === "circle")
-    req(isObj(ko.circlePx) && isPoint((ko.circlePx as Record<string, unknown>).center) && isNum((ko.circlePx as Record<string, unknown>).radiusPx), `${path}.circlePx`);
-  else req(Array.isArray(ko.polygonPx) && (ko.polygonPx as unknown[]).length >= 3 && (ko.polygonPx as unknown[]).every(isPoint), `${path}.polygonPx`);
+  // The discriminator and the populated payload must agree, and each shape's dimensions
+  // must be positive/simple — a "rect" with only a circlePx, a zero-size rect, or a
+  // self-intersecting polygon would otherwise reach the generator.
+  if (ko.shape === "rect") {
+    req(isRect(ko.rectPx), `${path}.rectPx`);
+    const r = ko.rectPx as Record<string, unknown>;
+    req((r.w as number) > 0 && (r.h as number) > 0, `${path}.rectPx (non-positive size)`);
+  } else if (ko.shape === "circle") {
+    const c = ko.circlePx as Record<string, unknown> | undefined;
+    req(isObj(c) && isPointB(c!.center) && inBounds(c!.radiusPx) && (c!.radiusPx as number) > 0, `${path}.circlePx`);
+  } else {
+    isValidRing(ko.polygonPx, `${path}.polygonPx`);
+  }
 }
 
 function validateGenerated(g: Record<string, unknown>): void {
@@ -264,34 +360,36 @@ function validateGenerated(g: Record<string, unknown>): void {
 function validateExportRecord(e: unknown, path: string): void {
   req(isObj(e), path);
   const r = e as Record<string, unknown>;
-  req(isStr(r.id) && isStr(r.fileName) && isStr(r.paramsHash) && isStr(r.generationKey), `${path}.strings`);
+  req(isBoundedStr(r.id) && isBoundedStr(r.fileName) && isBoundedStr(r.paramsHash) && isBoundedStr(r.generationKey), `${path}.strings`);
   req(isEnum(r.format, EXPORT_FORMATS), `${path}.format`);
-  req(isNum(r.sizeBytes) && isNum(r.createdAt), `${path}.numbers`);
+  req(isNonNeg(r.sizeBytes) && isNum(r.createdAt), `${path}.numbers (non-negative size, finite timestamp)`);
   req(isBool(r.wroteSidecar), `${path}.wroteSidecar`);
 }
 
 export function validateProjectShape(project: Record<string, unknown>): void {
-  req(isStr(project.id), "id");
-  req(isStr(project.name), "name");
-  req(isNum(project.version), "version");
+  req(isBoundedStr(project.id), "id");
+  req(isBoundedStr(project.name), "name");
+  req(isPosInt(project.version), "version (positive integer)");
   req(project.schemaVersion === SCHEMA_VERSION, "schemaVersion");
   req(isEnum(project.units, UNITS), "units");
-  req(isNum(project.createdAt) && isNum(project.updatedAt), "createdAt/updatedAt");
-  req(isStr(project.generatorVersion), "generatorVersion");
+  req(isNum(project.createdAt) && isNum(project.updatedAt), "createdAt/updatedAt (finite)");
+  req(isBoundedStr(project.generatorVersion), "generatorVersion");
 
   const board = project.board;
   req(isObj(board), "board");
   const b = board as Record<string, unknown>;
-  req(isStr(b.name) && isStr(b.revision), "board.name/revision");
+  req(isBoundedStr(b.name) && isBoundedStr(b.revision), "board.name/revision");
   req(isValNum(b.thicknessMm), "board.thicknessMm");
-  req(Array.isArray(b.holes), "board.holes");
-  req(Array.isArray(b.keepOuts), "board.keepOuts");
+  req(Array.isArray(b.holes) && (b.holes as unknown[]).length <= MAX_HOLES, "board.holes (count)");
+  req(Array.isArray(b.keepOuts) && (b.keepOuts as unknown[]).length <= MAX_KEEPOUTS, "board.keepOuts (count)");
   (b.holes as unknown[]).forEach((h, i) => validateHole(h, `board.holes[${i}]`));
   (b.keepOuts as unknown[]).forEach((k, i) => validateKeepOut(k, `board.keepOuts[${i}]`));
+  assertUniqueIds(b.holes as { id?: unknown }[], "board.holes");
+  assertUniqueIds(b.keepOuts as { id?: unknown }[], "board.keepOuts");
   if (b.outline !== null && b.outline !== undefined) {
     req(isObj(b.outline), "board.outline");
     const o = b.outline as Record<string, unknown>;
-    req(Array.isArray(o.vertices) && (o.vertices as unknown[]).length >= 3 && (o.vertices as unknown[]).every(isPoint), "board.outline.vertices");
+    isValidRing(o.vertices, "board.outline.vertices");
     req(isValNum(o.cornerRadiusMm), "board.outline.cornerRadiusMm");
     req(isBool(o.confirmed), "board.outline.confirmed");
   }
@@ -311,27 +409,42 @@ export function validateProjectShape(project: Record<string, unknown>): void {
   if (project.reference !== null && project.reference !== undefined) {
     req(isObj(project.reference), "reference");
     const r = project.reference as Record<string, unknown>;
-    req(isStr(r.id) && isStr(r.assetName) && isStr(r.src), "reference.strings");
-    req(isNum(r.widthPx) && r.widthPx > 0 && isNum(r.heightPx) && r.heightPx > 0, "reference.dimensions");
+    req(isBoundedStr(r.id) && isBoundedStr(r.assetName), "reference.strings");
+    // The reference source is an untrusted URL that the canvas renders directly.
+    req(isSafeReferenceSrc(r.src), "reference.src (must be a raster data URL or an app-relative asset path — remote schemes are rejected)");
+    req(inBounds(r.widthPx) && (r.widthPx as number) > 0 && inBounds(r.heightPx) && (r.heightPx as number) > 0, "reference.dimensions");
     req(isNum(r.rotationDeg), "reference.rotationDeg");
-    req(isObj(r.capture) && isStr((r.capture as Record<string, unknown>).label) && isEnum((r.capture as Record<string, unknown>).kind, CAPTURE_KINDS), "reference.capture");
+    req(isObj(r.capture) && isBoundedStr((r.capture as Record<string, unknown>).label) && isEnum((r.capture as Record<string, unknown>).kind, CAPTURE_KINDS), "reference.capture");
   }
   if (project.calibration !== null && project.calibration !== undefined) {
     req(isObj(project.calibration), "calibration");
     const c = project.calibration as Record<string, unknown>;
-    req(isStr(c.id), "calibration.id");
-    req(Array.isArray(c.anchors) && (c.anchors as unknown[]).length === 2 && (c.anchors as unknown[]).every(isPoint), "calibration.anchors");
+    req(isBoundedStr(c.id), "calibration.id");
+    req(Array.isArray(c.anchors) && (c.anchors as unknown[]).length === 2 && (c.anchors as unknown[]).every(isPointB), "calibration.anchors");
     req(isValNum(c.knownMm), "calibration.knownMm");
     req(isEnum(c.source, CAL_SOURCES), "calibration.source");
     req(isEnum(c.status, CAL_STATUS), "calibration.status");
     req(c.pxPerMm === null || isNum(c.pxPerMm), "calibration.pxPerMm");
-    if (c.status === "valid") req(isNum(c.pxPerMm) && (c.pxPerMm as number) > 0, "calibration.pxPerMm (valid requires a positive scale)");
+    if (c.status === "valid") {
+      req(isNum(c.pxPerMm) && (c.pxPerMm as number) > 0, "calibration.pxPerMm (valid requires a positive scale)");
+      // Re-run the SAME plausibility assessment the UI uses and derive the scale from the
+      // anchors + known distance — a persisted `pxPerMm` is never trusted as authority
+      // (reviewer #5). An imported file cannot smuggle in an implausible/arbitrary scale.
+      const anchors = c.anchors as Pt[];
+      const known = c.knownMm as { known: boolean; value?: unknown };
+      req(known.known === true && isNum(known.value) && (known.value as number) > 0, "calibration.knownMm (valid requires a known positive distance)");
+      const assessment = assessCalibration(anchors[0], anchors[1], known.value as number);
+      req(assessment.valid && assessment.pxPerMm != null, "calibration (anchors + known distance imply an implausible or degenerate scale)");
+      const derived = assessment.pxPerMm as number;
+      req(Math.abs(derived - (c.pxPerMm as number)) <= PX_PER_MM_REL_TOL * derived + 1e-6, "calibration.pxPerMm (stored scale disagrees with the anchors and known distance)");
+    }
   }
 
   if (project.generated !== null && project.generated !== undefined) {
     req(isObj(project.generated), "generated");
     validateGenerated(project.generated as Record<string, unknown>);
   }
-  req(Array.isArray(project.exports), "exports");
+  req(Array.isArray(project.exports) && (project.exports as unknown[]).length <= MAX_EXPORTS, "exports (count)");
   (project.exports as unknown[]).forEach((e, i) => validateExportRecord(e, `exports[${i}]`));
+  assertUniqueIds(project.exports as { id?: unknown }[], "exports");
 }

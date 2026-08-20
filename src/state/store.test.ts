@@ -247,6 +247,28 @@ describe("project file import/export", () => {
     expect(res.error).toMatch(/INVALID_JSON|not/i);
     expect(useStore.getState().projects.length).toBe(before);
   });
+
+  it("import is transactional: a quota failure does not open or route to the project (reviewer #5)", () => {
+    const p = openSample();
+    const text = serializeProject(useStore.getState().current!);
+    // Land on the library screen, then simulate a full quota during the import write.
+    useStore.setState({ route: { view: "library" }, current: null });
+    const before = useStore.getState().projects.length;
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    const res = useStore.getState().importProjectFile(text);
+    spy.mockRestore();
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/full|save|storage/i);
+    // No false "opened and saved": not routed, no current, not added to the library.
+    expect(useStore.getState().route).toEqual({ view: "library" });
+    expect(useStore.getState().current).toBeNull();
+    expect(useStore.getState().projects.length).toBe(before);
+    expect(useStore.getState().saveState).toBe("error");
+    void p;
+  });
 });
 
 describe("export is recorded only on download", () => {

@@ -116,6 +116,16 @@ describe("import boundary rejects malformed .mgproj data (untrusted input)", () 
     ["a calibration marked valid with no scale", (p) => ((p.calibration.status = "valid"), (p.calibration.pxPerMm = null)), /pxPerMm/],
     ["an invalid calibration status", (p) => (p.calibration.status = "kinda"), /calibration.status/],
     ["a keep-out whose discriminator and payload disagree", (p) => (p.board.keepOuts[0].shape = "circle"), /circlePx/],
+    // ---- resource / cross-field / trust-boundary invariants (reviewer #5) ----
+    ["a remote reference src (would fire an off-origin request)", (p) => (p.reference.src = "https://evil.example/track.png"), /reference\.src/],
+    ["a protocol-relative reference src", (p) => (p.reference.src = "//evil.example/x.png"), /reference\.src/],
+    ["a javascript: reference src", (p) => (p.reference.src = "javascript:alert(1)"), /reference\.src/],
+    ["a tampered calibration scale that disagrees with the anchors", (p) => (p.calibration.pxPerMm = 25), /pxPerMm/],
+    ["a calibration whose anchors imply an implausible scale", (p) => (p.calibration.anchors = [{ x: 100, y: 100 }, { x: 101, y: 100 }]), /calibration/],
+    ["a self-intersecting board outline", (p) => (p.board.outline.vertices = [{ x: 0, y: 0 }, { x: 100, y: 100 }, { x: 100, y: 0 }, { x: 0, y: 100 }]), /outline\.vertices/],
+    ["a duplicate hole id", (p) => (p.board.holes[1].id = p.board.holes[0].id), /duplicate id/],
+    ["a non-positive keep-out rectangle", (p) => (p.board.keepOuts[0].rectPx.w = 0), /non-positive/],
+    ["an out-of-bounds hole coordinate", (p) => (p.board.holes[0].centerPx = { x: 1e9, y: 0 }), /centerPx/],
   ];
 
   for (const [label, mutate, pattern] of cases) {
@@ -124,4 +134,45 @@ describe("import boundary rejects malformed .mgproj data (untrusted input)", () 
       expect(() => parseProjectFile(corruptFile(mutate))).toThrow(pattern);
     });
   }
+
+  it("accepts a raster data-URL reference (a supported local image)", () => {
+    const tiny = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAAAAAA6fptVAAAACklEQVR4nGMAAQAABQABDQottAAAAABJRU5ErkJggg==";
+    expect(() => parseProjectFile(corruptFile((p) => (p.reference.src = tiny)))).not.toThrow();
+  });
+
+  it("rejects a file larger than the size limit before parsing", () => {
+    const huge = " ".repeat(12_000_001);
+    expect(() => parseProjectFile(huge)).toThrow(/FILE_TOO_LARGE|larger than/);
+  });
+
+  it("rejects a top-level/project schema disagreement BEFORE migration erases it", () => {
+    // Top-level v0 marker paired with a project v1 marker: the raw check must catch it.
+    const file = JSON.stringify({ schemaVersion: 0, project: { schemaVersion: 1, id: "x", name: "y" } });
+    expect(() => parseProjectFile(file)).toThrow(/SCHEMA_MISMATCH|schema/);
+  });
+});
+
+describe("v0 migration opens end-to-end through parseProjectFile (reviewer #5)", () => {
+  it("a realistic pre-mount-strategy v0 file opens with a default mount and passes shape validation", () => {
+    const v0 = JSON.stringify({
+      project: {
+        id: "old-proj",
+        name: "legacy",
+        units: "mm",
+        createdAt: 10,
+        updatedAt: 20,
+        generatorVersion: "legacy",
+        board: { id: "b", name: "OLD", revision: "a", thicknessMm: { known: false }, outline: null, holes: [], keepOuts: [] },
+      },
+    });
+    const { project } = parseProjectFile(v0);
+    expect(project.schemaVersion).toBe(SCHEMA_VERSION);
+    expect(project.mount.kind).toBe("plate-standoffs");
+    expect(project.exports).toEqual([]);
+  });
+
+  it("even a sparse v0 file (only id/name/board) opens through parseProjectFile", () => {
+    const v0 = JSON.stringify({ project: { id: "x", name: "old", board: { id: "b", holes: [], keepOuts: [] } } });
+    expect(() => parseProjectFile(v0)).not.toThrow();
+  });
 });
