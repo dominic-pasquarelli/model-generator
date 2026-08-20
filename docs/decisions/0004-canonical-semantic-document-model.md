@@ -2,10 +2,10 @@
 title: ADR 0004 Canonical Semantic Document Model
 tier: decision
 adr: 0004
-status: proposed
+status: accepted
 date: 2026-08-16
-updated: 2026-08-16
-audited: 2026-08-16
+updated: 2026-08-20
+audited: 2026-08-20
 related:
   - docs/ARCHITECTURE.md
   - docs/TOOL_SPEC.md
@@ -15,7 +15,33 @@ related:
 
 ## Status
 
-Proposed. Owner decision and schema spike needed.
+Accepted (2026-08-20). The canonical semantic project document is Built and is the
+load-bearing source of truth for the whole app: kernel/mesh/scene/export artifacts are all
+derived from it. The `Val<T>` honesty union (`unknown` vs `inferred` / `measured` /
+`confirmed`) is implemented in `src/core/project/value.ts` and threaded through every
+numeric field, so unknown never serialises as zero. ADR 0007 (Accepted) ratifies the
+persisted `.mgproj` form of this model and its migration policy; ADR 0007 can no longer
+depend on a merely-Proposed 0004.
+
+## Decision (2026-08-20)
+
+The spike is complete and every Spike Exit Criterion below is met by shipped code:
+
+- The document types live in `src/core/project/types.ts`; construction/fixtures in
+  `src/core/project/fixtures.ts`; derived geometry-affecting values and the canonical
+  generation key in `src/core/project/derive.ts`.
+- Unknown / absent / inferred / measured / confirmed are distinct at the type level
+  (`Val<T>` = `Unknown | Known<T>` with a `source` discriminant) and are validated as an
+  untrusted boundary on load (`validateProjectShape` / `parseProjectFile` in
+  `src/core/project/schema.ts`, ADR 0007 / reviewer #7).
+- No missing numeric value serialises as `0`: the schema validator rejects a `known` value
+  whose `value` is not finite, and round-trip tests prove absence survives load/save.
+- The same fixtures feed host-level validation, geometry, export, and store tests, and the
+  UI editor — one document model, many derived consumers.
+- Kernel-native objects, scene nodes, and exported files are derived at read time
+  (`buildBracketMesh`, the STL/STEP writers, the 3D preview) and are never durable truth.
+
+The sections below are retained as the original Phase-0 spike record.
 
 ## Question
 

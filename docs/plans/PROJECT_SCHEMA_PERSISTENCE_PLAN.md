@@ -1,9 +1,9 @@
 ---
 title: Project Schema, Persistence and Migration Plan
 tier: workflow
-status: proposed
-updated: 2026-08-19
-audited: 2026-08-19
+status: living
+updated: 2026-08-20
+audited: 2026-08-20
 related:
   - docs/PROJECT_VISION.md
   - docs/ARCHITECTURE.md
@@ -32,9 +32,17 @@ corrupt-file and missing-asset handling; and the reusable board library. Maps to
 Phase 8.
 
 Out of scope / not ratified here: geometry kernel (`ADR 0005`), export formats (`ADR 0006`), the
-image/privacy boundary (`ADR 0008`), and the license (`ADR 0009`). This document proposes candidates
-and decision gates only. Ratification of the schema and packaging returns to `ADR 0007`; ratification
-of the canonical-model posture returns to `ADR 0004`. Status is proposed; nothing below is Built.
+image/privacy boundary (`ADR 0008`), and the license (`ADR 0009`). Ratification of the schema and
+packaging lives in `ADR 0007` (Accepted); ratification of the canonical-model posture lives in
+`ADR 0004` (Accepted).
+
+**Built and ratified:** the versioned JSON schema, the `Val<T>` serialization, forward-only
+migration with a `v1` fixture and round-trip tests, `.mgproj` save/open (`downloadProjectFile` /
+`importProjectFile`), additive import with fresh-id-on-collision, and runtime shape validation of
+the untrusted file boundary. **Still proposed (the sections below track it):** zipped-container
+asset packaging for large reference images (they embed as data-URL `src` today), and the
+autosave / recovery and missing-asset boundaries. Each such section is marked inline; do not read
+the design detail below as a claim that all of it ships today.
 
 ## Where It Fits (architecture seam)
 

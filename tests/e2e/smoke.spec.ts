@@ -178,6 +178,7 @@ test("changing a keep-out's shape keeps its geometry consistent", async ({ page 
   await page.getByLabel("Shape").selectOption("circle");
 
   // The editor now reflects a circle (Diameter readout), and export is still reachable
-  // (no structurally-invalid object was produced).
-  await expect(page.getByText("Diameter")).toBeVisible();
+  // (no structurally-invalid object was produced). Match the field label exactly — the
+  // generation-warning text ("…boss diameter, fit clearance…") also contains "diameter".
+  await expect(page.getByText("Diameter", { exact: true })).toBeVisible();
 });

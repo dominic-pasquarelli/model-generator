@@ -2,8 +2,8 @@
 title: History
 tier: record
 status: append-only
-updated: 2026-08-19
-audited: 2026-08-19
+updated: 2026-08-20
+audited: 2026-08-20
 related:
   - docs/NEXT.md
   - docs/audit-log.md
@@ -97,4 +97,21 @@ Turned the illustrative shell into a working tool. Preview and export now derive
 Honesty boundary held: the STEP is faceted (not analytic surfaces); Fusion import evidence and printed-part fit remain unrecorded; automatic board detection and camera/skew-aware calibration remain unbuilt. The export UI, sidecar, README, AGENTS, and ADRs 0005/0006/0007 all state this precisely.
 
 Verified: 79 host-level unit tests (added mesh manifold audit, STL/STEP structural validity, 3D projection, undo/redo, project-file round-trip, unit formatting) and 9 Playwright cases pass headless; `tsc` and `vite build` are clean; doc-audit passes.
+
+## 2026-08-20 - Independent-review response: full-scope pass
+
+An independent review of the sprint PR asked for real geometry and honest claims rather than narrowed controls. Every behavioral blocker was implemented (not disabled):
+
+- **One connected manifold** (#1, #3): rewrote `src/core/geometry/mesh.ts` to build a SINGLE connected, watertight, consistently-oriented solid without a boolean kernel — plate top/bottom faces are triangulated (`triangulate.ts`, a faithful linked-list earcut port) with the standoff/bore/keep-out circles as holes, and every feature welds into one vertex pool. New `poly2d.ts` (hull, outward offset, ring-overlap) supports the plate strategies and rejects overlapping keep-outs that would break the hole triangulation. An aggregate manifold audit (one component, every undirected edge shared by exactly two triangles, every directed edge once) runs in the tests. Every exposed semantic control (strategy, fastener style, tolerance, side tabs, corner radius, keep-outs, through/blind) now changes real geometry.
+- **No invented dimensions** (#2): unknown fabrication inputs (boss, clearance, mount height) block generation with a diagnosable error instead of defaulting silently; out-of-range bores and thin boss walls are rejected, not resized; every dimension the generator used is reported as `effective` with provenance beside the raw `requested` input.
+- **Artifact units vs display units** (#4): export metadata records `geometryUnits: "mm"` (always) separately from the display-only `displayUnits`, and the sidecar now carries a full auditable parameter snapshot — strategy/fastener/tolerance, generator constants (wall, minimum boss wall), each fabrication dimension as effective+provenance+requested, and a per-standoff bore table.
+- **One provenance for preview and metadata** (#5): the 3D preview mesh, its dimension pills, and its warning pill all come from ONE live build via `previewModel()`; a live mesh is never paired with stale stored numbers. A separate chip labels the build "Generated" (matches the recorded generation) or "Live draft". The export view uses the same seam.
+- **Monotonic project version through undo/redo** (#6): undo/redo restore the semantic state but always advance to a fresh strictly-increasing `version`, so two distinct states can never share an export filename.
+- **`.mgproj` as an untrusted boundary** (#7): `parseProjectFile` / `validateProjectShape` reject a malformed file (bad enums, non-finite knowns, schema mismatch, discriminator/payload disagreement) with a diagnosable error rather than trusting shape.
+
+Docs reconciled: ADR 0004 (canonical semantic model) promoted Proposed → Accepted now that it is the load-bearing, fully-implemented source of truth (ADR 0007 no longer depends on a Proposed decision); the persistence plan's contradictory "nothing is Built" language replaced with a precise Built-vs-proposed split (`status: living`); the regenerated MAP, README, AGENTS, and NEXT now state the single-connected-manifold contract and the current counts.
+
+Honesty boundary held: the STEP is still a *faceted* B-rep (curved walls are facets, not analytic surfaces); Autodesk Fusion import evidence and printed-part fit remain unrecorded (ADR 0006); automatic board detection and camera/skew-aware calibration remain unbuilt.
+
+Verified: 129 host-level unit tests (added the single-manifold audit suite, `poly2d`/`triangulate` unit tests, exporter units + parameter-snapshot tests, preview-provenance regression for the auto-off edit case, and undo/redo monotonic-version tests) and 9 Playwright cases pass headless; `tsc` and `vite build` are clean; doc-audit passes and its 10 unit tests pass.
 

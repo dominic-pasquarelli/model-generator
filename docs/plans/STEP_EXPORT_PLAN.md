@@ -280,8 +280,9 @@ downstream check exists.
 
 - Which STEP flavor (AP214 vs AP242) — owned by `ADR 0005` (kernel) and confirmed by `ADR 0006`.
 - Whether metadata is sidecar-only or partially embedded in the STEP header — owned by `ADR 0006`.
-- Whether bodies export fused (single) or separate (plate + standoffs) — affects `bodyCount`; owned by
-  `ADR 0005` generation strategy, recorded by `ADR 0006`.
+- ~~Whether bodies export fused (single) or separate (plate + standoffs)~~ — **decided (2026-08-20): fused.**
+  The generator builds one connected, watertight manifold, so `bodyCount` is 1 and the STEP carries a
+  single `MANIFOLD_SOLID_BREP`. Owned by `ADR 0005` generation strategy, recorded by `ADR 0006`.
 - STL inclusion by default vs opt-in — owned by `ADR 0006`.
 - Named Fusion version(s) the gate certifies — recorded in `ADR 0006` claim table as evidence accrues.
 
