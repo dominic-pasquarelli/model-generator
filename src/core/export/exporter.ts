@@ -24,10 +24,13 @@ export interface ExportMetadata {
   /** Provenance of the geometry path — the self-contained solid generator. */
   kernel: string;
   schemaVersion: number;
-  units: Project["units"];
   project: { id: string; name: string; version: number };
   paramsHash: string | null;
   format: ExportFormat;
+  /** Units of the ARTIFACT geometry — always millimetres, independent of the UI. */
+  geometryUnits: "mm";
+  /** The UI display preference only; never a claim about the geometry's units. */
+  displayUnits: Project["units"];
   /** What kind of geometry this artifact carries. */
   geometry: "faceted-brep" | "mesh";
   generatedDimensionsMm: { width: number; depth: number; height: number } | null;
@@ -43,9 +46,10 @@ export interface ExportMetadata {
 }
 
 const HONEST_NOTE =
-  "Real generated solid from the canonical model. STL is a watertight print mesh; STEP is a faceted B-rep " +
-  "(curved standoff walls and bores are facets, not analytic surfaces). Verified host-level (closed manifold, " +
-  "valid ISO-10303-21 structure). Autodesk Fusion import and printed-part fit are NOT yet verified (ADR 0006).";
+  "Real generated solid from the canonical model, in MILLIMETRES (STL is unitless — its coordinates are mm; STEP " +
+  "declares mm). STL is a single connected watertight manifold; STEP is a faceted B-rep (curved standoff walls and " +
+  "bores are facets, not analytic surfaces). Verified host-level (closed manifold, valid ISO-10303-21 structure). " +
+  "Autodesk Fusion import and printed-part fit are NOT yet verified (ADR 0006).";
 
 const UNSUPPORTED_CLAIMS = [
   "fusion-import-not-yet-verified",
@@ -76,7 +80,8 @@ export function buildMetadata(
     generator: GENERATOR_VERSION,
     kernel: `${ACTIVE_ADAPTER_VERSION} (self-contained faceted solid)`,
     schemaVersion: project.schemaVersion,
-    units: project.units,
+    geometryUnits: "mm",
+    displayUnits: project.units,
     project: { id: project.id, name: project.name, version: project.version },
     paramsHash: gen?.paramsHash ?? null,
     format,

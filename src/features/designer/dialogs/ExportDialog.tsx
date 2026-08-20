@@ -146,7 +146,7 @@ export function ExportDialog({ project }: { project: Project }) {
         />
         <MetaGrid
           rows={[
-            { dt: "Units", dd: meta.units },
+            { dt: "Units", dd: <>{meta.geometryUnits} geometry · {meta.displayUnits} display</> },
             { dt: "Schema", dd: <>v{meta.schemaVersion} · params <span className="mono">{hashLabel(meta.paramsHash ?? "—")}</span></> },
             { dt: "Sidecar", dd: <span className="mono">{ex.artifact.sidecar ? fileName.replace(/\.(step|stl)$/, ".meta.json") : "—"}</span> },
           ]}
@@ -200,7 +200,7 @@ export function ExportDialog({ project }: { project: Project }) {
               Will be recorded
             </div>
             <div style={{ fontSize: 11, color: "var(--text-2)", lineHeight: 1.8 }}>
-              Units <b>{project.units}</b>
+              Geometry <b>mm</b> · display <b>{project.units}</b>
               <br />
               Schema <b>v{project.schemaVersion}</b>
               <br />

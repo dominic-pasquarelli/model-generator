@@ -245,6 +245,14 @@ const TOOL_FOR_STEP: Partial<Record<StepId, ToolId>> = {
 let exportTimer: ReturnType<typeof setTimeout> | null = null;
 // Monotonic token so a newer generation supersedes an older in-flight one.
 let generationSeq = 0;
+
+// Strictly-increasing edit timestamp so the revision chronology is always ordered,
+// even for rapid successive transitions (Date.now() can repeat within a millisecond).
+let lastStamp = 0;
+function editStamp(): number {
+  lastStamp = Math.max(Date.now(), lastStamp + 1);
+  return lastStamp;
+}
 function stopExportTimer() {
   if (exportTimer) {
     clearTimeout(exportTimer);
@@ -450,7 +458,7 @@ export const useStore = create<AppState>((set, get) => {
     const next = structuredClone(current) as Project;
     mutator(next);
     next.version += 1;
-    next.updatedAt = Date.now();
+    next.updatedAt = editStamp();
     const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
     // Record the pre-edit snapshot for undo; a fresh edit clears the redo stack.
     const pastNext = [...get().past, snapshot].slice(-HISTORY_LIMIT);
@@ -488,24 +496,25 @@ export const useStore = create<AppState>((set, get) => {
     cursor: null,
     setCursor: (p) => set({ cursor: p }),
 
+    // Undo/redo are NEW forward document transitions: they restore an earlier SEMANTIC
+    // state but stamp a strictly-increasing version + timestamp, so `version` stays a
+    // monotonic edit counter (never reused, never decremented) and two distinct states
+    // can never share an export filename/version. Generation freshness is recomputed
+    // from the restored model's key, never trusted from the snapshot flag.
     undo: () => {
-      const past = get().past;
-      const current = get().current;
+      const { past, future, current, projects } = get();
       if (past.length === 0 || !current) return;
-      const prev = past[past.length - 1];
-      const futureNext = [...get().future, structuredClone(current) as Project].slice(-HISTORY_LIMIT);
-      const projectsNext = get().projects.map((p) => (p.id === prev.id ? prev : p));
-      commit(projectsNext, { current: prev, past: past.slice(0, -1), future: futureNext });
+      const restored: Project = { ...(structuredClone(past[past.length - 1]) as Project), version: current.version + 1, updatedAt: editStamp() };
+      const futureNext = [...future, structuredClone(current) as Project].slice(-HISTORY_LIMIT);
+      commit(projects.map((p) => (p.id === restored.id ? restored : p)), { current: restored, past: past.slice(0, -1), future: futureNext });
       if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
     },
     redo: () => {
-      const future = get().future;
-      const current = get().current;
+      const { past, future, current, projects } = get();
       if (future.length === 0 || !current) return;
-      const nextState = future[future.length - 1];
-      const pastNext = [...get().past, structuredClone(current) as Project].slice(-HISTORY_LIMIT);
-      const projectsNext = get().projects.map((p) => (p.id === nextState.id ? nextState : p));
-      commit(projectsNext, { current: nextState, past: pastNext, future: future.slice(0, -1) });
+      const restored: Project = { ...(structuredClone(future[future.length - 1]) as Project), version: current.version + 1, updatedAt: editStamp() };
+      const pastNext = [...past, structuredClone(current) as Project].slice(-HISTORY_LIMIT);
+      commit(projects.map((p) => (p.id === restored.id ? restored : p)), { current: restored, past: pastNext, future: future.slice(0, -1) });
       if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
     },
 

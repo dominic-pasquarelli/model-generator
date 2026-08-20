@@ -182,6 +182,49 @@ describe("undo / redo", () => {
   });
 });
 
+describe("undo/redo preserve a monotonic version and correct freshness", () => {
+  it("every transition strictly increases version and never reuses one (edit→edit→undo→redo→undo→branch)", () => {
+    openSample();
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    const seen: number[] = [];
+    let prev = { v: useStore.getState().current!.version, t: useStore.getState().current!.updatedAt };
+    seen.push(prev.v);
+    const check = () => {
+      const c = useStore.getState().current!;
+      expect(c.version, "version strictly increases").toBeGreaterThan(prev.v);
+      expect(c.updatedAt, "timestamp moves forward").toBeGreaterThanOrEqual(prev.t);
+      seen.push(c.version);
+      prev = { v: c.version, t: c.updatedAt };
+    };
+    useStore.getState().setThicknessMm(2);
+    check();
+    useStore.getState().setThicknessMm(3);
+    check();
+    useStore.getState().undo();
+    check();
+    useStore.getState().redo();
+    check();
+    useStore.getState().undo();
+    check();
+    useStore.getState().setThicknessMm(9); // branch edit after undo
+    check();
+    // No two transitions share a version → two states can never share an export filename.
+    expect(new Set(seen).size).toBe(seen.length);
+  });
+
+  it("undo restores generation currency by key (not by a snapshot flag)", async () => {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+    await useStore.getState().generate();
+    expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    useStore.getState().setThicknessMm(7.77); // changes the geometry key → stale
+    expect(isGenerationCurrent(useStore.getState().current!)).toBe(false);
+    useStore.getState().undo(); // restores the previously-generated geometry
+    expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
+  });
+});
+
 describe("project file import/export", () => {
   it("round-trips a serialized project back into the library with a fresh id on collision", () => {
     const p = openSample();
