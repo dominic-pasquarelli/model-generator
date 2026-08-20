@@ -60,3 +60,41 @@ describe("export units are geometry-fixed, independent of display", () => {
     expect(bMm.artifact.body).toBe(bIn.artifact.body); // identical STL bytes
   });
 });
+
+describe("sidecar carries a full auditable parameter snapshot (reviewer #4)", () => {
+  it("records effective dims with provenance, requested-vs-effective, and a per-standoff bore table", async () => {
+    const project = await withGeneration(createSampleProject(1_000_000));
+    const built = buildExport(project, { format: "step", writeSidecar: true, now: 1_000_000 });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+
+    const params = built.artifact.metadata.parameters;
+    expect(params).not.toBeNull();
+    if (!params) return;
+
+    // Strategy / fastener / tolerance and the generator constants are all present.
+    expect(params.strategy).toBe(project.mount.kind);
+    expect(params.fastenerStyle).toBe(project.mount.fastenerStyle);
+    expect(params.tolerance).toBe(project.mount.tolerance);
+    expect(params.wallMm).toBeGreaterThan(0);
+    expect(params.minBossWallMm).toBeGreaterThan(0);
+
+    // The sample's boss diameter is an INFERRED default — the snapshot says so, and shows
+    // the requested input beside the effective value (requested-vs-effective is auditable).
+    expect(params.bossDiameterMm.source).toBe("inferred");
+    expect(params.bossDiameterMm.requested).toEqual({ known: true, valueMm: 7, source: "inferred" });
+    expect(params.bossDiameterMm.effectiveMm).toBe(7);
+
+    // Every hole yields one standoff with a positive bore in the table.
+    expect(params.standoffs).toHaveLength(project.board.holes.length);
+    for (const s of params.standoffs) {
+      expect(s.boreDiameterMm).toBeGreaterThan(0);
+      expect(typeof s.through).toBe("boolean");
+      expect(Number.isFinite(s.centerMm.x) && Number.isFinite(s.centerMm.y)).toBe(true);
+    }
+
+    // The snapshot is serialised into the sidecar text, not just the in-memory object.
+    expect(built.artifact.sidecar).toContain('"parameters"');
+    expect(built.artifact.sidecar).toContain('"minBossWallMm"');
+  });
+});

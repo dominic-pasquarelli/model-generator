@@ -71,7 +71,7 @@ export const SEGMENTS = 40;
 /** Illustrative wall/margin (mm) around the board footprint. */
 export const WALL_MM = 3;
 /** Minimum boss wall left around a bore before the bore is treated as escaping the standoff. */
-const MIN_BOSS_WALL_MM = 0.6;
+export const MIN_BOSS_WALL_MM = 0.6;
 /** Minimum bore radius (mm) that still tessellates to a non-degenerate ring. */
 const MIN_BORE_RADIUS_MM = 0.05;
 
