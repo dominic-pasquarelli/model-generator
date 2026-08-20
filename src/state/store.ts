@@ -253,6 +253,26 @@ function editStamp(): number {
   lastStamp = Math.max(Date.now(), lastStamp + 1);
   return lastStamp;
 }
+
+/**
+ * An undo/redo snapshot of the EDITABLE semantic state only. `exports` is an append-only
+ * audit ledger, not editable design state, so it is excluded here and re-attached from the
+ * live project on restore (reviewer #4) — undoing a design edit must never delete a
+ * completed export record.
+ */
+function semanticSnapshot(project: Project): Project {
+  return { ...(structuredClone(project) as Project), exports: [] };
+}
+
+/**
+ * Restore a semantic snapshot as a NEW forward transition: keep the live append-only export
+ * ledger, and stamp a strictly-increasing version + timestamp so `version` stays a monotonic
+ * edit counter and two distinct states can never share an export filename. Generation
+ * freshness is recomputed from the restored model's key, never trusted from a stored flag.
+ */
+function restoreSemantic(snap: Project, current: Project): Project {
+  return { ...(structuredClone(snap) as Project), exports: structuredClone(current.exports), version: current.version + 1, updatedAt: editStamp() };
+}
 function stopExportTimer() {
   if (exportTimer) {
     clearTimeout(exportTimer);
@@ -454,13 +474,13 @@ export const useStore = create<AppState>((set, get) => {
   function mutate(mutator: (p: Project) => void): PersistResult {
     const current = get().current;
     if (!current) return { ok: false, error: "No open project" };
-    const snapshot = structuredClone(current) as Project;
+    const snapshot = semanticSnapshot(current);
     const next = structuredClone(current) as Project;
     mutator(next);
     next.version += 1;
     next.updatedAt = editStamp();
     const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
-    // Record the pre-edit snapshot for undo; a fresh edit clears the redo stack.
+    // Record the pre-edit SEMANTIC snapshot for undo; a fresh edit clears the redo stack.
     const pastNext = [...get().past, snapshot].slice(-HISTORY_LIMIT);
     const res = commit(projectsNext, { current: next, past: pastNext, future: [] });
     if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
@@ -496,24 +516,22 @@ export const useStore = create<AppState>((set, get) => {
     cursor: null,
     setCursor: (p) => set({ cursor: p }),
 
-    // Undo/redo are NEW forward document transitions: they restore an earlier SEMANTIC
-    // state but stamp a strictly-increasing version + timestamp, so `version` stays a
-    // monotonic edit counter (never reused, never decremented) and two distinct states
-    // can never share an export filename/version. Generation freshness is recomputed
-    // from the restored model's key, never trusted from the snapshot flag.
+    // Undo/redo are NEW forward document transitions that restore an earlier SEMANTIC state
+    // (see restoreSemantic): the append-only `exports` ledger is preserved across both, and
+    // `version` stays a strictly-increasing monotonic counter.
     undo: () => {
       const { past, future, current, projects } = get();
       if (past.length === 0 || !current) return;
-      const restored: Project = { ...(structuredClone(past[past.length - 1]) as Project), version: current.version + 1, updatedAt: editStamp() };
-      const futureNext = [...future, structuredClone(current) as Project].slice(-HISTORY_LIMIT);
+      const restored = restoreSemantic(past[past.length - 1], current);
+      const futureNext = [...future, semanticSnapshot(current)].slice(-HISTORY_LIMIT);
       commit(projects.map((p) => (p.id === restored.id ? restored : p)), { current: restored, past: past.slice(0, -1), future: futureNext });
       if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
     },
     redo: () => {
       const { past, future, current, projects } = get();
       if (future.length === 0 || !current) return;
-      const restored: Project = { ...(structuredClone(future[future.length - 1]) as Project), version: current.version + 1, updatedAt: editStamp() };
-      const pastNext = [...past, structuredClone(current) as Project].slice(-HISTORY_LIMIT);
+      const restored = restoreSemantic(future[future.length - 1], current);
+      const pastNext = [...past, semanticSnapshot(current)].slice(-HISTORY_LIMIT);
       commit(projects.map((p) => (p.id === restored.id ? restored : p)), { current: restored, past: pastNext, future: future.slice(0, -1) });
       if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
     },

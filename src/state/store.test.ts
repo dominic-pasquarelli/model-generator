@@ -277,3 +277,63 @@ describe("export is recorded only on download", () => {
     expect(isCurrentModelExported(useStore.getState().current!)).toBe(false);
   });
 });
+
+describe("undo/redo preserve the append-only export ledger (reviewer #4)", () => {
+  function commitAnExport() {
+    vi.useFakeTimers();
+    useStore.getState().runExport();
+    vi.advanceTimersByTime(3000);
+    vi.useRealTimers();
+    useStore.getState().commitExportDownload();
+  }
+
+  it("edit → generate → export → undo keeps the export record; redo keeps it exactly once", async () => {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+    useStore.getState().setThicknessMm(1.7); // a design edit (creates an undo step)
+    await useStore.getState().generate();
+    commitAnExport();
+    expect(useStore.getState().current!.exports).toHaveLength(1);
+    const recId = useStore.getState().current!.exports[0].id;
+
+    useStore.getState().undo(); // undo the design edit
+    expect(useStore.getState().current!.exports.map((e) => e.id), "export history survives undo").toEqual([recId]);
+
+    useStore.getState().redo();
+    expect(useStore.getState().current!.exports.map((e) => e.id), "still present exactly once after redo").toEqual([recId]);
+  });
+
+  it("keeps every export across multiple edits and undos", async () => {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+
+    useStore.getState().setThicknessMm(1.7);
+    await useStore.getState().generate();
+    commitAnExport(); // export #1
+
+    useStore.getState().setThicknessMm(1.9);
+    await useStore.getState().generate();
+    commitAnExport(); // export #2 (a different model)
+
+    expect(useStore.getState().current!.exports).toHaveLength(2);
+    const ids = new Set(useStore.getState().current!.exports.map((e) => e.id));
+
+    useStore.getState().undo();
+    useStore.getState().undo();
+    // Both records survive undoing back past both design edits.
+    expect(new Set(useStore.getState().current!.exports.map((e) => e.id))).toEqual(ids);
+    expect(useStore.getState().current!.exports).toHaveLength(2);
+  });
+
+  it("undo snapshots carry no export ledger (append-only data is excluded from history)", async () => {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+    useStore.getState().setThicknessMm(1.7);
+    await useStore.getState().generate();
+    commitAnExport();
+    // The stored pre-edit snapshot is semantic-only: it must not carry the export ledger.
+    const past = useStore.getState().past;
+    expect(past.length).toBeGreaterThan(0);
+    expect(past[past.length - 1].exports).toEqual([]);
+  });
+});
