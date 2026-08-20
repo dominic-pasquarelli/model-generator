@@ -12,7 +12,6 @@ import { generationKey } from "@/core/project/derive";
 import type { GeneratedModel, Project } from "@/core/project/types";
 import { ACTIVE_ADAPTER_VERSION, type GenerateResult, type GeometryAdapter } from "./adapter";
 import { buildBracketMesh } from "./mesh";
-import { computeWarnings } from "./mockGenerator";
 
 function now(): number {
   const g = globalThis as { performance?: { now?: () => number } };
@@ -35,7 +34,7 @@ export const solidGenerator: GeometryAdapter = {
       key: key ?? "",
       paramsHash: key ?? "",
       dims: built.dims,
-      warnings: computeWarnings(project),
+      warnings: built.warnings, // computed from the EFFECTIVE generated geometry
       createdAt: Date.now(),
       durationMs: Number.isFinite(elapsed) && elapsed > 0 ? Math.round(elapsed * 100) / 100 : null,
     };
