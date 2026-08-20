@@ -8,9 +8,12 @@
  * shells are genuinely closed and manifold.
  *
  * Honesty boundary: this is a FACETED B-rep. Curved standoff walls and bores are the
- * mesh's flat facets, not analytic cylinders. The file is a structurally valid AP214
- * solid (verified host-level); import into Autodesk Fusion remains the unproven evidence
- * gate owned by ADR 0006 — this writer does not claim it.
+ * mesh's flat facets, not analytic cylinders. The file's structure is checked host-level
+ * against the internal properties in step.test.ts (reference-complete graph, one closed
+ * shell, one face per triangle, each edge shared by exactly two oppositely-sensed faces) —
+ * NOT by an independent EXPRESS/AP214 kernel, so "valid AP214" is scoped to those internal
+ * properties. Import into Autodesk Fusion remains the unproven evidence gate owned by
+ * ADR 0006 — this writer does not claim it.
  */
 import type { BracketMesh, BodyMesh } from "@/core/geometry/mesh";
 

@@ -4,8 +4,8 @@ tier: decision
 adr: 0005
 status: accepted
 date: 2026-08-16
-updated: 2026-08-19
-audited: 2026-08-19
+updated: 2026-08-20
+audited: 2026-08-20
 related:
   - docs/ARCHITECTURE.md
   - docs/workflows/BOARD_MOUNT_DESIGNER.md
@@ -21,11 +21,11 @@ Accepted (2026-08-19). A **self-contained TypeScript mesh solid generator** is B
 
 The **mesh-only path** in the matrix below was promoted from a fallback to the shipped generator and implemented dependency-free in TypeScript (`src/core/geometry/mesh.ts` + `src/core/geometry/solidGenerator.ts`, the active `GeometryAdapter`).
 
-Rationale: the Board Mount Designer geometry family — a prismatic plate, cylindrical standoffs with coaxial bores, and box tabs — is simple enough to generate a **real, watertight, closed-manifold multi-body solid deterministically without any WASM kernel**. This clears the browser-viability, determinism, and diagnostics criteria immediately at zero bundle cost, and the same solid feeds the 3D preview and both exporters (the "same shared geometry path" rule).
+Rationale: the Board Mount Designer geometry family — a prismatic plate, cylindrical standoffs with coaxial bores, and box tabs — is simple enough to generate a **real, watertight, single connected closed-manifold solid deterministically without any WASM kernel**. This clears the browser-viability, determinism, and diagnostics criteria immediately at zero bundle cost, and the same solid feeds the 3D preview and both exporters (the "same shared geometry path" rule).
 
 What it produces and its evidence class:
 
-- A multi-body closed solid (plate + one bored standoff per hole + side tabs). Every body passes a **host-level manifold audit** (each directed edge used exactly once, each undirected edge shared by exactly two triangles, Euler `V − E + F = 2`).
+- A **single connected** closed solid (plate + one bored standoff per hole + optional side tabs, all welded into one vertex pool). The plate top/bottom faces are triangulated with the standoff/bore/keep-out circles as holes, so the whole artifact is one connected manifold rather than a pile of overlapping shells. It passes a **production, fail-closed aggregate manifold audit** (`auditMesh` in `mesh.ts`) that runs BEFORE any preview or export is returned — not just a fixture assertion — verifying: finite coordinates, valid indices, nonzero-area triangles, every undirected edge shared by exactly two oppositely-directed uses (watertight + consistently oriented), exactly one connected component, a single manifold fan at every vertex, and positive signed volume. Because preview and both exporters consume this audited result, none can serialise a solid that failed the audit. (This supersedes the earlier per-body `V − E + F = 2` Euler description: the artifact is one body and correctness is proven by the aggregate audit above, which is strictly stronger — it also proves vertex-manifoldness and positive volume.)
 - **Generated-geometry-level** fixture checks pass: the ADR two/four-hole rectangular fixture yields the expected footprint (85 mm + 2×3 mm wall = 91 mm), height (base + standoff), and standoff count.
 - **Browser-level**: the Playwright journey renders the generated solid in the live 3D preview.
 - Diagnostics: generation returns coded errors (`MISSING_DIAMETER`, `MISSING_MOUNT_HEIGHT`, `UNRESOLVED_MODEL`, …) with the implicated feature, never fabricating geometry from an Unknown value.

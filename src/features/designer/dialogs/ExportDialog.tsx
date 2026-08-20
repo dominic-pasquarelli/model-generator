@@ -242,23 +242,23 @@ export function ExportDialog({ project }: { project: Project }) {
           selected={ex.format === "step"}
           name="STEP"
           ext=".step"
-          desc="Real faceted B-rep solid (ISO-10303-21 AP214). Curved walls are facets, not analytic surfaces; Fusion import is not yet verified."
+          desc="Real faceted B-rep solid (ISO-10303-21 AP214 structure). Curved walls are facets, not analytic surfaces; validated against internal properties, not an independent kernel; Fusion import is not yet verified."
           onSelect={() => setFormat("step")}
         />
         <RadioCard
           selected={ex.format === "stl"}
           name="STL"
           ext=".stl"
-          desc="Real watertight print mesh of the generated solid, ready for a slicer."
+          desc="Generated ASCII STL mesh of the watertight solid; downstream slicer compatibility is not yet verified."
           onSelect={() => setFormat("stl")}
         />
       </div>
       <div style={{ display: "flex", gap: 7, marginTop: 10, fontSize: 11, color: "var(--info)", alignItems: "flex-start" }}>
         <Icon name="info" style={{ width: 13, height: 13, marginTop: 1 }} />
         <div>
-          Real geometry from the canonical model, with a metadata sidecar. STEP is a faceted B-rep and STL a
-          watertight mesh — both verified host-level. Autodesk Fusion import and printed-part fit are not yet
-          verified (the deferred evidence gate, ADR 0006).
+          Real geometry from the canonical model, with a full parameter sidecar. STEP is a faceted B-rep and STL a
+          watertight mesh — both host-level verified against internal properties, not an independent CAD kernel or
+          slicer. Autodesk Fusion import and printed-part fit are not yet verified (the deferred evidence gate, ADR 0006).
         </div>
       </div>
       <div className="fgrid" style={{ marginTop: 12 }}>

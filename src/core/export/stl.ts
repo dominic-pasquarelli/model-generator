@@ -1,8 +1,10 @@
 /**
- * STL writer. Serialises a real generated {@link BracketMesh} to ASCII STL — a genuine,
- * printable triangle solid, not a placeholder. STL is a mesh tessellation of the same
- * solid the preview and STEP consume (the shared-geometry-path rule), so its bounding
- * box matches theirs exactly. Per-facet normals are computed from the triangle vertices.
+ * STL writer. Serialises a real generated {@link BracketMesh} to ASCII STL — a genuine
+ * triangle solid, not a placeholder. STL is a mesh tessellation of the same single
+ * connected solid the preview and STEP consume (the shared-geometry-path rule), so its
+ * bounding box matches theirs exactly. Per-facet normals are computed from the triangle
+ * vertices. Honesty boundary: this is generated ASCII STL; downstream slicer compatibility
+ * is not yet verified against any real slicer.
  */
 import type { BracketMesh } from "@/core/geometry/mesh";
 
@@ -35,7 +37,7 @@ function facetNormal(ax: number, ay: number, az: number, bx: number, by: number,
   return [nx / len, ny / len, nz / len];
 }
 
-/** Serialise the whole multi-body mesh as one ASCII STL solid. */
+/** Serialise the single connected solid as one ASCII STL solid. */
 export function meshToAsciiStl(mesh: BracketMesh, solidName = "board_mount"): string {
   const safe = solidName.replace(/[^a-z0-9_]+/gi, "_").toLowerCase() || "board_mount";
   const p = mesh.positions;
