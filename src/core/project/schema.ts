@@ -154,6 +154,13 @@ export function parseProjectFile(text: string): ProjectFile {
   if (!project || typeof project !== "object") {
     throw new MgFileError("MISSING_PROJECT", "Project file has no `project` payload.");
   }
+  // When both are present they must agree — a top-level/project schema-version mismatch
+  // is a corrupt or hand-edited file, not a migratable one.
+  const topV = (migrated as Record<string, unknown>).schemaVersion;
+  const projV = (project as unknown as Record<string, unknown>).schemaVersion;
+  if (typeof topV === "number" && typeof projV === "number" && topV !== projV) {
+    throw new MgFileError("SCHEMA_MISMATCH", `Top-level schema v${topV} does not match project schema v${projV}.`);
+  }
   validateProjectShape(project as unknown as Record<string, unknown>);
   return { schemaVersion: SCHEMA_VERSION, project };
 }
@@ -172,70 +179,159 @@ function isNum(v: unknown): v is number {
 function isStr(v: unknown): v is string {
   return typeof v === "string";
 }
+function isBool(v: unknown): v is boolean {
+  return typeof v === "boolean";
+}
 function isPoint(v: unknown): boolean {
   return isObj(v) && isNum(v.x) && isNum(v.y);
 }
-/** A Val<T>: either {known:false} or {known:true, value, source}. */
-function isVal(v: unknown): boolean {
+function isRect(v: unknown): boolean {
+  return isObj(v) && isNum(v.x) && isNum(v.y) && isNum(v.w) && isNum(v.h);
+}
+
+// Canonical enum vocabularies (kept in sync with types.ts). A file carrying any value
+// outside these is rejected rather than silently accepted into geometry/preview/export.
+const UNITS = new Set(["mm", "inch"]);
+const SOURCES = new Set(["inferred", "measured", "confirmed"]);
+const FASTENERS = new Set(["M2", "M2.5", "M3", "M4", "custom"]);
+const STRATEGIES = new Set(["plate-standoffs", "rect-plate", "standoff-bridge"]);
+const FASTENER_STYLES = new Set(["heat-set-insert", "self-tapping", "through-bolt"]);
+const TOLERANCES = new Set(["fdm-0.20", "fdm-0.15", "sla-0.05", "custom"]);
+const KEEPOUT_SHAPES = new Set(["rect", "circle", "polygon"]);
+const BOARD_SIDES = new Set(["top", "bottom"]);
+const HOLE_POSITIONS = new Set(["clicked-calibrated", "typed", "inferred-pattern"]);
+const CAL_STATUS = new Set(["uncalibrated", "valid", "invalid"]);
+const CAL_SOURCES = new Set(["calipers", "datasheet", "ruler-in-photo", "known-feature", "other"]);
+const CAPTURE_KINDS = new Set(["photo", "scan", "drawing", "unknown"]);
+const EXPORT_FORMATS = new Set(["step", "stl"]);
+
+function isEnum(v: unknown, set: Set<string>): boolean {
+  return isStr(v) && set.has(v);
+}
+/**
+ * A Val<number>: EITHER {known:false} OR {known:true, value:<finite number>, source:<enum>}.
+ * Crucially, a known value must be a real finite number — a string "3" is rejected so
+ * JS coercion can never turn imported text into NaN/concatenated geometry.
+ */
+function isValNum(v: unknown): boolean {
   if (!isObj(v)) return false;
   if (v.known === false) return true;
-  return v.known === true && "value" in v && isStr(v.source);
+  return v.known === true && isNum(v.value) && isEnum(v.source, SOURCES);
 }
 function req(cond: boolean, path: string): void {
   if (!cond) throw new MgFileError("INVALID_SHAPE", `Project field \`${path}\` is malformed.`);
+}
+
+function validateHole(h: unknown, path: string): void {
+  req(isObj(h), path);
+  const hole = h as Record<string, unknown>;
+  req(isStr(hole.id) && isStr(hole.label), `${path}.id/label`);
+  req(isPoint(hole.centerPx), `${path}.centerPx`);
+  req(isValNum(hole.diameterMm), `${path}.diameterMm`);
+  req(isEnum(hole.fastener, FASTENERS), `${path}.fastener`);
+  req(isEnum(hole.positionSource, HOLE_POSITIONS), `${path}.positionSource`);
+  req(isEnum(hole.state, SOURCES), `${path}.state`);
+}
+
+function validateKeepOut(k: unknown, path: string): void {
+  req(isObj(k), path);
+  const ko = k as Record<string, unknown>;
+  req(isStr(ko.id) && isStr(ko.label) && isStr(ko.purpose), `${path}.id/label/purpose`);
+  req(isEnum(ko.shape, KEEPOUT_SHAPES), `${path}.shape`);
+  req(isEnum(ko.boardSide, BOARD_SIDES), `${path}.boardSide`);
+  req(isValNum(ko.clearanceHeightMm), `${path}.clearanceHeightMm`);
+  req(isEnum(ko.state, SOURCES), `${path}.state`);
+  // The discriminator and the populated payload must agree — a "rect" with only a
+  // circlePx would otherwise slip past generation/validation.
+  if (ko.shape === "rect") req(isRect(ko.rectPx), `${path}.rectPx`);
+  else if (ko.shape === "circle")
+    req(isObj(ko.circlePx) && isPoint((ko.circlePx as Record<string, unknown>).center) && isNum((ko.circlePx as Record<string, unknown>).radiusPx), `${path}.circlePx`);
+  else req(Array.isArray(ko.polygonPx) && (ko.polygonPx as unknown[]).length >= 3 && (ko.polygonPx as unknown[]).every(isPoint), `${path}.polygonPx`);
+}
+
+function validateGenerated(g: Record<string, unknown>): void {
+  req(isNum(g.sourceVersion) && isStr(g.key) && isStr(g.paramsHash), "generated.header");
+  req(isObj(g.dims), "generated.dims");
+  const d = g.dims as Record<string, unknown>;
+  for (const f of ["widthMm", "depthMm", "heightMm", "standoffCount", "bodies", "triangles"]) {
+    req(isNum(d[f]), `generated.dims.${f}`);
+  }
+  req(Array.isArray(g.warnings) && (g.warnings as unknown[]).every(isStr), "generated.warnings");
+  req(isNum(g.createdAt), "generated.createdAt");
+  req(g.durationMs === null || isNum(g.durationMs), "generated.durationMs");
+}
+
+function validateExportRecord(e: unknown, path: string): void {
+  req(isObj(e), path);
+  const r = e as Record<string, unknown>;
+  req(isStr(r.id) && isStr(r.fileName) && isStr(r.paramsHash) && isStr(r.generationKey), `${path}.strings`);
+  req(isEnum(r.format, EXPORT_FORMATS), `${path}.format`);
+  req(isNum(r.sizeBytes) && isNum(r.createdAt), `${path}.numbers`);
+  req(isBool(r.wroteSidecar), `${path}.wroteSidecar`);
 }
 
 export function validateProjectShape(project: Record<string, unknown>): void {
   req(isStr(project.id), "id");
   req(isStr(project.name), "name");
   req(isNum(project.version), "version");
-  req(isNum(project.schemaVersion), "schemaVersion");
-  req(Array.isArray(project.exports), "exports");
+  req(project.schemaVersion === SCHEMA_VERSION, "schemaVersion");
+  req(isEnum(project.units, UNITS), "units");
+  req(isNum(project.createdAt) && isNum(project.updatedAt), "createdAt/updatedAt");
+  req(isStr(project.generatorVersion), "generatorVersion");
 
   const board = project.board;
   req(isObj(board), "board");
   const b = board as Record<string, unknown>;
-  req(isStr(b.name), "board.name");
-  req(isVal(b.thicknessMm), "board.thicknessMm");
+  req(isStr(b.name) && isStr(b.revision), "board.name/revision");
+  req(isValNum(b.thicknessMm), "board.thicknessMm");
   req(Array.isArray(b.holes), "board.holes");
   req(Array.isArray(b.keepOuts), "board.keepOuts");
-  for (const [i, h] of (b.holes as unknown[]).entries()) {
-    req(isObj(h), `board.holes[${i}]`);
-    const hole = h as Record<string, unknown>;
-    req(isStr(hole.id) && isStr(hole.label), `board.holes[${i}].id/label`);
-    req(isPoint(hole.centerPx), `board.holes[${i}].centerPx`);
-    req(isVal(hole.diameterMm), `board.holes[${i}].diameterMm`);
-  }
-  for (const [i, k] of (b.keepOuts as unknown[]).entries()) {
-    req(isObj(k), `board.keepOuts[${i}]`);
-    const ko = k as Record<string, unknown>;
-    req(isStr(ko.id) && isStr(ko.shape), `board.keepOuts[${i}].id/shape`);
-    req(isVal(ko.clearanceHeightMm), `board.keepOuts[${i}].clearanceHeightMm`);
-  }
+  (b.holes as unknown[]).forEach((h, i) => validateHole(h, `board.holes[${i}]`));
+  (b.keepOuts as unknown[]).forEach((k, i) => validateKeepOut(k, `board.keepOuts[${i}]`));
   if (b.outline !== null && b.outline !== undefined) {
     req(isObj(b.outline), "board.outline");
     const o = b.outline as Record<string, unknown>;
-    req(Array.isArray(o.vertices) && (o.vertices as unknown[]).every(isPoint), "board.outline.vertices");
-    req(isVal(o.cornerRadiusMm), "board.outline.cornerRadiusMm");
+    req(Array.isArray(o.vertices) && (o.vertices as unknown[]).length >= 3 && (o.vertices as unknown[]).every(isPoint), "board.outline.vertices");
+    req(isValNum(o.cornerRadiusMm), "board.outline.cornerRadiusMm");
+    req(isBool(o.confirmed), "board.outline.confirmed");
   }
 
   const mount = project.mount;
   req(isObj(mount), "mount");
   const m = mount as Record<string, unknown>;
-  req(isStr(m.kind), "mount.kind");
+  req(isEnum(m.kind, STRATEGIES), "mount.kind");
+  req(isEnum(m.fastener, FASTENERS), "mount.fastener");
+  req(isEnum(m.fastenerStyle, FASTENER_STYLES), "mount.fastenerStyle");
+  req(isEnum(m.tolerance, TOLERANCES), "mount.tolerance");
+  req(m.sideTabs === 0 || m.sideTabs === 2 || m.sideTabs === 4, "mount.sideTabs");
   for (const f of ["standoffHeightMm", "baseThicknessMm", "bossDiameterMm", "clearanceMm"]) {
-    req(isVal(m[f]), `mount.${f}`);
+    req(isValNum(m[f]), `mount.${f}`);
   }
 
   if (project.reference !== null && project.reference !== undefined) {
     req(isObj(project.reference), "reference");
     const r = project.reference as Record<string, unknown>;
-    req(isStr(r.src) && isNum(r.widthPx) && isNum(r.heightPx), "reference.src/dimensions");
+    req(isStr(r.id) && isStr(r.assetName) && isStr(r.src), "reference.strings");
+    req(isNum(r.widthPx) && r.widthPx > 0 && isNum(r.heightPx) && r.heightPx > 0, "reference.dimensions");
+    req(isNum(r.rotationDeg), "reference.rotationDeg");
+    req(isObj(r.capture) && isStr((r.capture as Record<string, unknown>).label) && isEnum((r.capture as Record<string, unknown>).kind, CAPTURE_KINDS), "reference.capture");
   }
   if (project.calibration !== null && project.calibration !== undefined) {
     req(isObj(project.calibration), "calibration");
     const c = project.calibration as Record<string, unknown>;
-    req(Array.isArray(c.anchors) && (c.anchors as unknown[]).every(isPoint), "calibration.anchors");
-    req(isStr(c.status), "calibration.status");
+    req(isStr(c.id), "calibration.id");
+    req(Array.isArray(c.anchors) && (c.anchors as unknown[]).length === 2 && (c.anchors as unknown[]).every(isPoint), "calibration.anchors");
+    req(isValNum(c.knownMm), "calibration.knownMm");
+    req(isEnum(c.source, CAL_SOURCES), "calibration.source");
+    req(isEnum(c.status, CAL_STATUS), "calibration.status");
+    req(c.pxPerMm === null || isNum(c.pxPerMm), "calibration.pxPerMm");
+    if (c.status === "valid") req(isNum(c.pxPerMm) && (c.pxPerMm as number) > 0, "calibration.pxPerMm (valid requires a positive scale)");
   }
+
+  if (project.generated !== null && project.generated !== undefined) {
+    req(isObj(project.generated), "generated");
+    validateGenerated(project.generated as Record<string, unknown>);
+  }
+  req(Array.isArray(project.exports), "exports");
+  (project.exports as unknown[]).forEach((e, i) => validateExportRecord(e, `exports[${i}]`));
 }
