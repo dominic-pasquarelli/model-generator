@@ -1,18 +1,17 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { Project } from "@/core/project/types";
-import { buildBracketMesh } from "@/core/geometry/mesh";
+import type { BracketMesh } from "@/core/geometry/mesh";
 import { projectMesh, VIEW_PRESETS, type OrbitCamera, type ViewId } from "./mesh3d";
 
 const MIN_PITCH = 0.03;
 const MAX_PITCH = 1.55;
 
 /**
- * Live 3D preview of the REAL generated solid. Builds the bracket mesh from the
- * canonical model and renders flat-shaded, depth-sorted SVG polygons — the same solid
- * the STL/STEP exporters serialise. Drag to orbit; the view buttons reset the camera.
+ * Renders a prebuilt bracket solid as flat-shaded, depth-sorted SVG polygons — the same
+ * mesh the STL/STEP exporters serialise. It never builds geometry itself: the caller
+ * passes the single live build so the rendered mesh and the displayed dimensions/warnings
+ * always come from one and the same generation. Drag to orbit; view buttons reset camera.
  */
-export function MeshView3D({ project, view }: { project: Project; view: ViewId }) {
-  const meshResult = useMemo(() => buildBracketMesh(project), [project]);
+export function MeshView3D({ mesh, view }: { mesh: BracketMesh | null; view: ViewId }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const [size, setSize] = useState({ w: 520, h: 380 });
   const [cam, setCam] = useState<OrbitCamera>(VIEW_PRESETS[view] ?? VIEW_PRESETS.iso);
@@ -34,8 +33,8 @@ export function MeshView3D({ project, view }: { project: Project; view: ViewId }
   }, [view]);
 
   const projection = useMemo(
-    () => (meshResult.ok ? projectMesh(meshResult.mesh, cam, { width: size.w, height: size.h }) : null),
-    [meshResult, cam, size.w, size.h],
+    () => (mesh ? projectMesh(mesh, cam, { width: size.w, height: size.h }) : null),
+    [mesh, cam, size.w, size.h],
   );
 
   const onPointerDown = (e: React.PointerEvent) => {

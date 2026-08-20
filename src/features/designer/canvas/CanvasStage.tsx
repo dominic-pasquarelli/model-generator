@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { cn } from "@/lib/cn";
 import { Icon } from "@/icons/Icon";
 import { Kbd } from "@/components/ui/Badge";
@@ -10,6 +11,7 @@ import { EmptyState } from "./EmptyState";
 import { Viewport2D } from "./Viewport2D";
 import { Preview3D } from "./Preview3D";
 import { MeshView3D } from "./MeshView3D";
+import { previewModel } from "./previewModel";
 import { CalibrationPopover } from "../dialogs/CalibrationPopover";
 import { ExportDialog } from "../dialogs/ExportDialog";
 
@@ -92,6 +94,12 @@ function ContextPill({ project, step }: { project: Project; step: string }) {
   return null;
 }
 
+/** Export-mode 3D view. Renders the same live build the STL/STEP exporters serialise. */
+function Export3DView({ project }: { project: Project }) {
+  const preview = useMemo(() => previewModel(project), [project]);
+  return <MeshView3D mesh={preview.ok ? preview.mesh : null} view="fit" />;
+}
+
 export function CanvasStage({ project }: { project: Project }) {
   const step = useStore((s) => s.ui.activeStep);
   const calibrationOpen = useStore((s) => s.ui.calibrationOpen);
@@ -138,7 +146,7 @@ export function CanvasStage({ project }: { project: Project }) {
 
         {mode === "export3d" ? (
           <>
-            {project.generated ? <MeshView3D project={project} view="fit" /> : null}
+            <Export3DView project={project} />
             <ExportDialog project={project} />
           </>
         ) : null}
