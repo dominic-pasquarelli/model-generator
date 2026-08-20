@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { createSampleProject } from "@/core/project/fixtures";
 import { measured, unknownVal } from "@/core/project/value";
 import type { Project } from "@/core/project/types";
-import { buildBracketMesh, type BracketMesh } from "./mesh";
+import { assembleSolid, auditMesh, buildBracketMesh, hashMesh, type BracketMesh } from "./mesh";
 
 /**
  * Aggregate manifold audit over the WHOLE solid (not per-body):
@@ -57,6 +57,11 @@ describe("buildBracketMesh — one connected watertight manifold", () => {
     expect(a.boundaryEdges, "watertight").toBe(0);
     expect(a.nonManifoldDirected, "consistent orientation / no coincident faces").toBe(0);
     expect(a.components, "one connected part").toBe(1);
+    // The SAME production audit that gates generation must pass (finite, indexed, nonzero
+    // area, edge-manifold, one component, vertex-manifold fans, positive volume).
+    const prod = auditMesh(r.mesh);
+    expect(prod.ok, prod.ok ? "" : `${prod.code}: ${prod.message}`).toBe(true);
+    if (prod.ok) expect(prod.components).toBe(1);
   });
 
   const variants: Array<[string, (p: Project) => void]> = [
@@ -150,5 +155,78 @@ describe("buildBracketMesh — one connected watertight manifold", () => {
     const b = build(createSampleProject(1_000_000));
     expect(Array.from(a.mesh.positions)).toEqual(Array.from(b.mesh.positions));
     expect(Array.from(a.mesh.indices)).toEqual(Array.from(b.mesh.indices));
+    expect(a.meshHash).toBe(b.meshHash);
+  });
+});
+
+describe("buildBracketMesh — fail-closed hardening (reviewer #1/#2)", () => {
+  it("rejects a boss whose centre is inside the plate but whose rim crosses the edge", () => {
+    const p = createSampleProject(1_000_000);
+    // Board-mm (0, 25): centre is inside the plate (left edge at −3 mm), but the ⌀7 mm boss
+    // rim reaches −3.5 mm, past the plate edge. Centre-only checks would miss this.
+    p.board.holes[0].centerPx = { x: 75, y: 300 };
+    const r = buildBracketMesh(p);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("STANDOFF_OFF_PLATE");
+  });
+
+  it("rejects two bosses that merely touch (tangent), not only ones that overlap", () => {
+    const p = createSampleProject(1_000_000);
+    // Centres exactly 2·bossR (7 mm = 70 px) apart → tangent → rejected within CONTACT_EPS.
+    p.board.holes = [
+      { ...p.board.holes[0], centerPx: { x: 200, y: 300 } },
+      { ...p.board.holes[1], centerPx: { x: 270, y: 300 } },
+    ];
+    const r = buildBracketMesh(p);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("BOSS_OVERLAP");
+  });
+
+  it("returns a coded error when a concave outline cannot be offset (no silent strategy swap)", () => {
+    const p = createSampleProject(1_000_000);
+    p.mount.kind = "plate-standoffs";
+    p.board.outline!.cornerRadiusMm = unknownVal<number>();
+    // A rectangle with a 2 mm-wide slot cut 25 mm into the top edge; a 3 mm outward offset
+    // folds the slot walls over each other.
+    p.board.outline!.vertices = [
+      { x: 75, y: 50 },
+      { x: 490, y: 50 },
+      { x: 490, y: 300 },
+      { x: 510, y: 300 },
+      { x: 510, y: 50 },
+      { x: 925, y: 50 },
+      { x: 925, y: 610 },
+      { x: 75, y: 610 },
+    ];
+    const r = buildBracketMesh(p);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(["OUTLINE_OFFSET_FAILED", "OUTLINE_NOT_SIMPLE"]).toContain(r.error.code);
+  });
+
+  it("standoff-bridge builds a real footprint from few seats (1 and 2) and stays manifold", () => {
+    for (const n of [1, 2]) {
+      const p = createSampleProject(1_000_000);
+      p.mount.kind = "standoff-bridge";
+      p.board.holes = p.board.holes.slice(0, n);
+      const r = build(p);
+      const prod = auditMesh(r.mesh);
+      expect(prod.ok, prod.ok ? "" : `${n} seats: ${prod.code}`).toBe(true);
+    }
+  });
+
+  it("reports per-corner effective fillet radius (never the requested value when clamped)", () => {
+    const p = createSampleProject(1_000_000);
+    p.board.outline!.cornerRadiusMm = measured(3);
+    const r = build(p);
+    expect(r.effective.cornerRadiusMm).toBe(3);
+    expect(r.effective.corners.length).toBeGreaterThan(0);
+    for (const c of r.effective.corners) expect(c.effectiveRadiusMm).toBeLessThanOrEqual(3 + 1e-6);
+  });
+
+  it("assembleSolid reconstructs the same mesh hash from the pure-mm recipe", () => {
+    const r = build(createSampleProject(1_000_000));
+    const again = assembleSolid(r.recipe);
+    expect(again.ok).toBe(true);
+    if (again.ok) expect(hashMesh(again.mesh)).toBe(r.meshHash);
   });
 });

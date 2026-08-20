@@ -4,6 +4,11 @@
  * the plate footprint (rectangle, offset outline, or standoff-bridge hull) and classify
  * keep-outs, all without a general boolean kernel: features are spliced or added as
  * holes so the resulting solid stays a single manifold by construction.
+ *
+ * The predicates here are tolerance-aware (reviewer #1): endpoint contact and collinear
+ * overlap count as intersection; ring separation is measured against {@link CONTACT_EPS},
+ * which sits an order of magnitude above the vertex-weld quantum so two features accepted
+ * as disjoint can never weld into a non-manifold pinch downstream.
  */
 export interface Pt {
   x: number;
@@ -11,6 +16,16 @@ export interface Pt {
 }
 
 const TAU = Math.PI * 2;
+
+/** Numerical orientation epsilon — below this a cross product is treated as zero. */
+export const GEOM_EPS = 1e-9;
+/**
+ * Minimum clear gap (mm) between two feature rings that are accepted as disjoint. The
+ * welded surface quantises vertices at 1e-4 mm (see mesh.ts `Surface`), so keeping rings
+ * ≥ 1e-3 mm apart guarantees their sampled vertices never collapse together and pinch the
+ * manifold. Also the tolerance for "a point lies on a ring boundary".
+ */
+export const CONTACT_EPS = 1e-3;
 
 export function ringArea(r: Pt[]): number {
   let a = 0;
@@ -27,7 +42,8 @@ export function ccw(r: Pt[]): Pt[] {
   return ringArea(r) < 0 ? [...r].reverse() : [...r];
 }
 
-/** Even-odd point-in-polygon (boundary counts as inside within eps). */
+/** Even-odd point-in-polygon. Boundary membership is intentionally undefined here — use
+ *  {@link pointInRingStrict}/{@link pointOnRing} when boundary handling must be explicit. */
 export function pointInRing(p: Pt, ring: Pt[]): boolean {
   let inside = false;
   for (let i = 0, n = ring.length, j = n - 1; i < n; j = i++) {
@@ -75,7 +91,7 @@ export function boundingBox(pts: Pt[]): { x0: number; y0: number; x1: number; y1
   return { x0, y0, x1, y1 };
 }
 
-/** Andrew's monotone-chain convex hull (CCW). */
+/** Andrew's monotone-chain convex hull (CCW). Collinear/duplicate points are dropped. */
 export function convexHull(points: Pt[]): Pt[] {
   const pts = [...points].sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
   if (pts.length < 3) return pts;
@@ -96,25 +112,105 @@ export function convexHull(points: Pt[]): Pt[] {
   return ccw([...lower, ...upper]);
 }
 
-function ccwTurn(a: Pt, b: Pt, c: Pt): number {
+// ---- tolerance-aware primitive predicates ----
+
+function orient(a: Pt, b: Pt, c: Pt): number {
   return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
 }
 
-/** Do segments p1p2 and p3p4 cross (proper or touching)? */
-export function segmentsIntersect(p1: Pt, p2: Pt, p3: Pt, p4: Pt): boolean {
-  const d1 = ccwTurn(p3, p4, p1);
-  const d2 = ccwTurn(p3, p4, p2);
-  const d3 = ccwTurn(p1, p2, p3);
-  const d4 = ccwTurn(p1, p2, p4);
-  if (((d1 > 0 && d2 < 0) || (d1 < 0 && d2 > 0)) && ((d3 > 0 && d4 < 0) || (d3 < 0 && d4 > 0))) return true;
-  return false;
+/** Is `p` on segment ab (collinear within eps AND within the segment's span)? */
+export function onSegment(p: Pt, a: Pt, b: Pt, eps = CONTACT_EPS): boolean {
+  const d = distPointToSeg(p, a, b);
+  return d <= eps;
+}
+
+function distPointToSeg(p: Pt, a: Pt, b: Pt): number {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(p.x - a.x, p.y - a.y);
+  let t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+/** Minimum distance between two segments (0 when they intersect). */
+export function segSegDistance(a: Pt, b: Pt, c: Pt, d: Pt): number {
+  if (segmentsIntersect(a, b, c, d)) return 0;
+  return Math.min(distPointToSeg(a, c, d), distPointToSeg(b, c, d), distPointToSeg(c, a, b), distPointToSeg(d, a, b));
 }
 
 /**
- * Do two simple rings overlap (share interior area)? Conservative: a bbox reject, then
- * vertex-containment both ways, then an edge-crossing test. Over-reporting is acceptable —
- * callers use it to keep overlapping holes out of the plate triangulation, which requires
- * disjoint holes to stay manifold.
+ * Do segments p1p2 and p3p4 intersect? Detects proper crossings AND touching/collinear
+ * overlap (reviewer #1: the earlier version silently ignored endpoint and collinear
+ * contact). `eps` governs the orientation sign; contact is judged with {@link onSegment}.
+ */
+export function segmentsIntersect(p1: Pt, p2: Pt, p3: Pt, p4: Pt, eps = GEOM_EPS): boolean {
+  const d1 = orient(p3, p4, p1);
+  const d2 = orient(p3, p4, p2);
+  const d3 = orient(p1, p2, p3);
+  const d4 = orient(p1, p2, p4);
+  if (((d1 > eps && d2 < -eps) || (d1 < -eps && d2 > eps)) && ((d3 > eps && d4 < -eps) || (d3 < -eps && d4 > eps))) return true;
+  // Collinear / endpoint contact: a zero orientation plus containment on the other segment.
+  if (Math.abs(d1) <= eps && onSegment(p1, p3, p4)) return true;
+  if (Math.abs(d2) <= eps && onSegment(p2, p3, p4)) return true;
+  if (Math.abs(d3) <= eps && onSegment(p3, p1, p2)) return true;
+  if (Math.abs(d4) <= eps && onSegment(p4, p1, p2)) return true;
+  return false;
+}
+
+/** Minimum distance from `p` to a ring's boundary. */
+export function distPointToRing(p: Pt, ring: Pt[]): number {
+  let best = Infinity;
+  for (let i = 0, n = ring.length; i < n; i++) {
+    const d = distPointToSeg(p, ring[i], ring[(i + 1) % n]);
+    if (d < best) best = d;
+  }
+  return best;
+}
+
+/** `p` lies on the ring boundary within eps. */
+export function pointOnRing(p: Pt, ring: Pt[], eps = CONTACT_EPS): boolean {
+  return distPointToRing(p, ring) <= eps;
+}
+
+/** `p` is strictly inside the ring (interior, and more than eps from the boundary). */
+export function pointInRingStrict(p: Pt, ring: Pt[], eps = CONTACT_EPS): boolean {
+  return pointInRing(p, ring) && distPointToRing(p, ring) > eps;
+}
+
+/**
+ * Is `ring` a simple polygon? No fewer than three points, no duplicate/degenerate edges,
+ * and no two non-adjacent edges intersecting (touching included). O(n²) — fine for the
+ * modest rings the generator and importer produce.
+ */
+export function isSimpleRing(ring: Pt[], eps = CONTACT_EPS): boolean {
+  const n = ring.length;
+  if (n < 3) return false;
+  for (let i = 0; i < n; i++) {
+    const a = ring[i];
+    const b = ring[(i + 1) % n];
+    if (Math.hypot(b.x - a.x, b.y - a.y) <= eps) return false; // zero-length edge / duplicate point
+  }
+  for (let i = 0; i < n; i++) {
+    const a1 = ring[i];
+    const a2 = ring[(i + 1) % n];
+    for (let j = i + 1; j < n; j++) {
+      // Skip edges that share a vertex (adjacent, and the wrap-around pair).
+      if (j === i) continue;
+      if ((j + 1) % n === i || (i + 1) % n === j) continue;
+      const b1 = ring[j];
+      const b2 = ring[(j + 1) % n];
+      if (segmentsIntersect(a1, a2, b1, b2)) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Do two simple rings share interior area or cross? Conservative: bbox reject, then
+ * vertex-containment both ways, then an edge-crossing test (touching included). Used to
+ * keep overlapping holes out of the plate triangulation.
  */
 export function ringsOverlap(a: Pt[], b: Pt[]): boolean {
   const ba = boundingBox(a);
@@ -132,6 +228,40 @@ export function ringsOverlap(a: Pt[], b: Pt[]): boolean {
   return false;
 }
 
+/**
+ * Are two rings strictly separated — no overlap, no crossing, and every edge of one at
+ * least `eps` away from every edge of the other (reviewer #1: tangent rings that pass an
+ * edge-count audit but pinch a vertex must be rejected)?
+ */
+export function ringsSeparated(a: Pt[], b: Pt[], eps = CONTACT_EPS): boolean {
+  if (ringsOverlap(a, b)) return false;
+  for (let i = 0; i < a.length; i++) {
+    const a1 = a[i];
+    const a2 = a[(i + 1) % a.length];
+    for (let j = 0; j < b.length; j++) {
+      if (segSegDistance(a1, a2, b[j], b[(j + 1) % b.length]) < eps) return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Is `inner` wholly inside `outer` with clearance — every inner vertex strictly interior,
+ * and no inner edge within `eps` of the outer boundary (reviewer #1: a ring whose centre
+ * is inside can still have a rim crossing the boundary)?
+ */
+export function ringContainsRing(outer: Pt[], inner: Pt[], eps = CONTACT_EPS): boolean {
+  if (!inner.every((p) => pointInRingStrict(p, outer, eps))) return false;
+  for (let i = 0; i < inner.length; i++) {
+    const i1 = inner[i];
+    const i2 = inner[(i + 1) % inner.length];
+    for (let j = 0; j < outer.length; j++) {
+      if (segSegDistance(i1, i2, outer[j], outer[(j + 1) % outer.length]) < eps) return false;
+    }
+  }
+  return true;
+}
+
 function norm(dx: number, dy: number): { x: number; y: number } {
   const len = Math.hypot(dx, dy) || 1;
   return { x: dx / len, y: dy / len };
@@ -140,14 +270,15 @@ function norm(dx: number, dy: number): { x: number; y: number } {
 /**
  * Offset a simple CCW ring outward by `d` (mm). Each edge is pushed out along its
  * outward normal and adjacent offset edges are intersected to form the new vertex. Returns
- * null when the result self-intersects (e.g. an offset larger than a concave notch), so the
- * caller can fall back to a bounding rectangle rather than emit a degenerate plate.
+ * null when the input is not simple or the result self-intersects (e.g. an offset larger
+ * than a concave notch), so the caller emits a coded error instead of a degenerate plate.
  */
 export function offsetRingOutward(ring: Pt[], d: number): Pt[] | null {
   const r = ccw(ring);
   const n = r.length;
   if (n < 3) return null;
-  if (d === 0) return r;
+  if (d === 0) return isSimpleRing(r) ? r : null;
+  if (!isSimpleRing(r)) return null;
   // Outward normal of a CCW ring points to the RIGHT of the edge direction.
   const offsetLines: { p: Pt; dir: Pt }[] = [];
   for (let i = 0; i < n; i++) {
@@ -165,10 +296,12 @@ export function offsetRingOutward(ring: Pt[], d: number): Pt[] | null {
     if (!hit) return null;
     out.push(hit);
   }
-  // Self-intersection guard: winding must stay CCW and area must grow.
+  // Self-intersection guard: winding must stay CCW, area must grow, AND the result must be
+  // a simple polygon (area growth alone can pass while a concave offset folds over itself).
   const a0 = Math.abs(ringArea(r));
   const a1 = ringArea(out);
   if (a1 <= a0) return null;
+  if (!isSimpleRing(out)) return null;
   return out;
 }
 

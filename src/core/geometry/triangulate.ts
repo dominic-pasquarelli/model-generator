@@ -6,11 +6,36 @@
  * outer vertex, then the merged simple polygon is ear-clipped. Robust for a plate outline
  * with many circular/polygonal holes (standoff seats, bores, keep-outs). Output triangles
  * are wound counter-clockwise. Used to cap the top/bottom faces of the generated solid.
+ *
+ * The core linked-list ear-clipping routine (buildLinked, eliminateHole, findHoleBridge,
+ * splitPolygon, filterPoints, earcutLinked, isEar) is adapted from Mapbox's Earcut
+ * (https://github.com/mapbox/earcut), used under the ISC License:
+ *
+ *   ISC License
+ *   Copyright (c) 2016, Mapbox
+ *   Permission to use, copy, modify, and/or distribute this software for any purpose with
+ *   or without fee is hereby granted, provided that the above copyright notice and this
+ *   permission notice appear in all copies.
+ *   THE SOFTWARE IS PROVIDED "AS IS" AND THE AUTHOR DISCLAIMS ALL WARRANTIES WITH REGARD TO
+ *   THIS SOFTWARE INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS. IN NO
+ *   EVENT SHALL THE AUTHOR BE LIABLE FOR ANY SPECIAL, DIRECT, INDIRECT, OR CONSEQUENTIAL
+ *   DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS, WHETHER
+ *   IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN
+ *   CONNECTION WITH THE USE OR PERFORMANCE OF THIS SOFTWARE.
+ *
+ * This port adds an explicit success/error result: it reports whether every hole was
+ * bridged, whether the whole polygon was consumed, and whether the triangles cover the
+ * expected `outer area − Σ hole areas`, so a caller can fail closed rather than silently
+ * serialise a partially-triangulated cap (reviewer #1).
  */
 export interface Pt {
   x: number;
   y: number;
 }
+
+export type TriangulateResult =
+  | { ok: true; vertices: Pt[]; triangles: [number, number, number][]; area: number }
+  | { ok: false; code: "UNBRIDGED_HOLE" | "INCOMPLETE" | "AREA_MISMATCH"; message: string };
 
 class Node {
   x: number;
@@ -37,10 +62,12 @@ export function signedArea(ring: Pt[]): number {
 }
 
 /**
- * Triangulate `outer` (with optional `holes`). Returns the combined vertex list (outer
- * then holes, in order) and CCW triangle index triples into it.
+ * Triangulate `outer` (with optional `holes`). On success returns the combined vertex list
+ * (outer then holes, in order), CCW triangle index triples into it, and the covered area.
+ * Fails closed when a hole cannot be bridged, the polygon is not fully consumed, or the
+ * covered area does not match `outer area − Σ hole areas` within tolerance.
  */
-export function triangulate(outer: Pt[], holes: Pt[][] = []): { vertices: Pt[]; triangles: [number, number, number][] } {
+export function triangulate(outer: Pt[], holes: Pt[][] = []): TriangulateResult {
   const vertices: Pt[] = [];
   const push = (ring: Pt[]) => {
     const start = vertices.length;
@@ -50,8 +77,9 @@ export function triangulate(outer: Pt[], holes: Pt[][] = []): { vertices: Pt[]; 
 
   const outerRange = push(outer);
   let outerNode = buildLinked(vertices, outerRange.start, outerRange.end, true);
-  if (!outerNode) return { vertices, triangles: [] };
+  if (!outerNode) return { ok: false, code: "INCOMPLETE", message: "Outer ring has fewer than three non-degenerate vertices." };
 
+  let expected = Math.abs(signedArea(outer));
   if (holes.length > 0) {
     const queue: Node[] = [];
     for (const h of holes) {
@@ -60,15 +88,34 @@ export function triangulate(outer: Pt[], holes: Pt[][] = []): { vertices: Pt[]; 
       if (list) {
         if (list === list.next) list.steiner = true;
         queue.push(leftmost(list));
+        expected -= Math.abs(signedArea(h));
       }
     }
     queue.sort((a, b) => a.x - b.x);
-    for (const q of queue) outerNode = eliminateHole(q, outerNode);
+    for (const q of queue) {
+      const res = eliminateHole(q, outerNode);
+      if (!res.bridged) {
+        return { ok: false, code: "UNBRIDGED_HOLE", message: "A hole could not be bridged to the outer polygon (overlapping or out-of-bounds hole)." };
+      }
+      outerNode = res.node;
+    }
   }
 
   const triangles: [number, number, number][] = [];
-  earcutLinked(outerNode, triangles);
-  return { vertices, triangles };
+  const consumed = earcutLinked(outerNode, triangles);
+  if (!consumed) {
+    return { ok: false, code: "INCOMPLETE", message: "Ear clipping stalled before consuming the whole polygon." };
+  }
+
+  let covered = 0;
+  for (const [a, b, c] of triangles) {
+    covered += Math.abs(((vertices[b].x - vertices[a].x) * (vertices[c].y - vertices[a].y) - (vertices[c].x - vertices[a].x) * (vertices[b].y - vertices[a].y)) / 2);
+  }
+  const tol = Math.max(1e-6, 1e-4 * expected);
+  if (Math.abs(covered - expected) > tol) {
+    return { ok: false, code: "AREA_MISMATCH", message: `Triangulated area ${covered.toFixed(4)} ≠ expected ${expected.toFixed(4)} (mm²).` };
+  }
+  return { ok: true, vertices, triangles, area: covered };
 }
 
 /** Build a circular doubly-linked list for [start,end); force CCW when clockwise !== expected. */
@@ -128,12 +175,12 @@ function pointInTriangle(ax: number, ay: number, bx: number, by: number, cx: num
 
 // ---- hole elimination (bridge each hole to the outer polygon) ----
 
-function eliminateHole(hole: Node, outerNode: Node): Node {
+function eliminateHole(hole: Node, outerNode: Node): { node: Node; bridged: boolean } {
   const bridge = findHoleBridge(hole, outerNode);
-  if (!bridge) return outerNode;
+  if (!bridge) return { node: outerNode, bridged: false };
   const bridgeReverse = splitPolygon(bridge, hole);
   filterPoints(bridgeReverse, bridgeReverse.next);
-  return filterPoints(outerNode, outerNode.next);
+  return { node: filterPoints(outerNode, outerNode.next), bridged: true };
 }
 
 function findHoleBridge(hole: Node, outerNode: Node): Node | null {
@@ -226,8 +273,9 @@ function equalNode(a: Node, b: Node): boolean {
 
 // ---- ear clipping ----
 
-function earcutLinked(ear: Node | null, triangles: [number, number, number][], pass = 0): void {
-  if (!ear) return;
+/** Returns true when the polygon was fully consumed (reduced to a single triangle). */
+function earcutLinked(ear: Node | null, triangles: [number, number, number][], pass = 0): boolean {
+  if (!ear) return true;
   let stop = ear;
   let prev: Node;
   let next: Node;
@@ -244,13 +292,13 @@ function earcutLinked(ear: Node | null, triangles: [number, number, number][], p
     }
     p = next;
     if (p === stop) {
-      // No ear found on a full pass — try filtering collinear points once, else bail.
-      if (pass === 0) {
-        earcutLinked(filterPoints(p), triangles, 1);
-      }
-      return;
+      // No ear found on a full pass — try filtering collinear points once, else bail as
+      // incomplete so the caller fails closed rather than emitting a partial cap.
+      if (pass === 0) return earcutLinked(filterPoints(p), triangles, 1);
+      return false;
     }
   }
+  return true;
 }
 
 function isEar(ear: Node): boolean {

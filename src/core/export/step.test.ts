@@ -77,11 +77,14 @@ describe("meshToStep — structural validity", () => {
     expect(sampleStep().step).toBe(sampleStep().step);
   });
 
-  it("emits no lowercase-e exponent tokens even when a hole sits at the board origin", () => {
-    // Hole at the outline bbox min → board-mm (0,0); a 48-seg ring seam lands on cos(π/2),
-    // which without the -0/near-zero snap would serialise as a lowercase-e exponent real.
+  it("emits no lowercase-e exponent tokens (ring-seam and axis normals snap cleanly)", () => {
+    // A hole near the plate corner: ring seams land on cos(π/2)/sin(0) and the plate/bore
+    // walls emit axis-aligned normals — both produce ~1e-17 noise that, without the -0 and
+    // near-zero snap in the STEP writer, would serialise as a lowercase-e exponent real.
+    // (The boss must stay wholly inside the plate, so this is as close to the corner as the
+    // containment invariant allows.)
     const p = createSampleProject(1_000_000);
-    p.board.holes = [{ ...p.board.holes[0], centerPx: { x: 75, y: 50 } }];
+    p.board.holes = [{ ...p.board.holes[0], centerPx: { x: 111, y: 86 } }];
     const r = buildBracketMesh(p);
     expect(r.ok).toBe(true);
     if (!r.ok) return;

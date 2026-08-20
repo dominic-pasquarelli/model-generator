@@ -1,26 +1,44 @@
 /**
- * Real bracket geometry — one connected, watertight, manifold solid by construction.
+ * Real bracket geometry — one connected, watertight, manifold solid, proven by audit.
  *
  * `buildBracketMesh` turns the canonical model into a SINGLE closed solid in board-space
  * millimetres: a plate (rectangular, board-outline, or standoff-bridge per strategy),
  * standoffs rising at each hole with a per-fastener bore (blind insert seat, blind pilot,
  * or through clearance), optional side tabs, and keep-out footprints subtracted from the
  * plate. Booleans are avoided: the plate top/bottom faces are triangulated with the
- * standoff/keep-out/bore circles as holes, and every feature shares welded vertices, so
- * the whole artifact is one connected manifold — not a pile of overlapping shells.
+ * standoff/keep-out/bore circles as holes, and every feature shares welded vertices.
  *
- * Honesty (reviewer #2): nothing is silently invented. Unknown fabrication dimensions
- * (boss, clearance) block generation with a diagnosable error; a too-thin boss or an
- * out-of-range bore is rejected rather than silently resized; every dimension the
- * generator uses is reported as `effective` with provenance, alongside the `requested`
- * inputs and a warnings list, so preview/export can show exactly what was built.
+ * Correctness is a production invariant, not a fixture assertion (reviewer #1). The pure-mm
+ * {@link SolidRecipe} is assembled by {@link assembleSolid}, then {@link auditMesh} runs
+ * fail-closed BEFORE success is returned — finite coordinates, valid indices, nonzero-area
+ * triangles, every undirected edge shared by exactly two oppositely-directed uses, a single
+ * connected component, a single manifold fan at every vertex, and positive volume. Because
+ * the preview and both exporters consume this same result, none of them can serialise a
+ * solid that failed the audit.
+ *
+ * Honesty (reviewer #2): nothing is silently invented. Unknown fabrication dimensions block
+ * generation with a diagnosable error; a too-thin boss, an out-of-range bore, an outline
+ * that cannot be offset safely, or a self-intersecting plate is rejected rather than
+ * silently reshaped; every dimension the generator uses is reported as `effective` with
+ * provenance, alongside the `requested` inputs, the full mm recipe, and a mesh hash.
  */
 import type { Point } from "@/core/geom";
 import { boardFrame, outlineDims, pxPointToBoardMm } from "@/core/project/derive";
 import type { GeneratedDimensions, KeepOut, Project } from "@/core/project/types";
 import { isKnown, maybe } from "@/core/project/value";
 import type { GeometryError } from "./adapter";
-import { ccw, circleRing, convexHull, offsetRingOutward, pointInRing, rectRing, ringsOverlap, type Pt } from "./poly2d";
+import {
+  ccw,
+  circleRing,
+  convexHull,
+  isSimpleRing,
+  offsetRingOutward,
+  pointInRingStrict,
+  ringContainsRing,
+  ringsSeparated,
+  CONTACT_EPS,
+  type Pt,
+} from "./poly2d";
 import { triangulate } from "./triangulate";
 
 export type Vec3 = readonly [number, number, number];
@@ -47,6 +65,37 @@ export interface EffectiveValue {
   source: "measured" | "confirmed" | "inferred";
 }
 
+/** Per-corner fillet outcome: requested radius vs the radius actually achievable after clamp. */
+export interface CornerReport {
+  requestedRadiusMm: number;
+  effectiveRadiusMm: number;
+  clamped: boolean;
+}
+
+export interface TabReport {
+  edgeIndex: number;
+  widthMm: number;
+  depthMm: number;
+  boreCenterMm: Point;
+  boreRadiusMm: number;
+}
+
+export interface KeepOutReport {
+  label: string;
+  subtracted: boolean;
+  reason: string | null;
+}
+
+export interface StandoffReport {
+  label: string;
+  centerMm: Point;
+  requestedDiameterMm: EffectiveValue | null;
+  bossDiameterMm: number;
+  boreDiameterMm: number;
+  through: boolean;
+}
+
+/** The complete effective geometry recipe reported to the sidecar (reviewer #3/#4). */
 export interface EffectiveParams {
   strategy: Project["mount"]["kind"];
   fastenerStyle: Project["mount"]["fastenerStyle"];
@@ -56,24 +105,69 @@ export interface EffectiveParams {
   bossDiameterMm: EffectiveValue;
   clearanceMm: EffectiveValue;
   toleranceOffsetMm: number;
+  /** Requested corner radius (mm); per-corner effective values are in `corners`. */
   cornerRadiusMm: number;
+  corners: CornerReport[];
   wallMm: number;
+  /** Applied plate offset (mm) for the outline/bridge strategies; 0 for rect-plate. */
+  plateOffsetMm: number;
+  segments: number;
+  weldToleranceMm: number;
+  contactToleranceMm: number;
   sideTabs: 0 | 2 | 4;
-  standoffs: { label: string; centerMm: Point; boreDiameterMm: number; through: boolean }[];
+  tabs: TabReport[];
+  /** Effective plate outline the solid was built on (board-space mm). */
+  plateOutlineMm: Point[];
+  /** Requested board outline in mm (only when the strategy consumes it), else null. */
+  requestedOutlineMm: Point[] | null;
+  keepOuts: KeepOutReport[];
+  standoffs: StandoffReport[];
 }
 
-export type MeshResult =
-  | { ok: true; mesh: BracketMesh; dims: GeneratedDimensions; warnings: string[]; effective: EffectiveParams }
-  | { ok: false; error: GeometryError };
+/** Pure-mm geometry that {@link assembleSolid} consumes — no Project, no calibration. */
+export interface SolidRecipe {
+  plate: Point[];
+  baseZ0: number;
+  baseZ1: number;
+  topZ: number;
+  standoffs: { center: Point; bossR: number; boreR: number; through: boolean }[];
+  keepOutHoles: Point[][];
+  tabBores: { center: Point; r: number }[];
+  segments: number;
+  weldEpsMm: number;
+}
+
+export interface GeometryBuild {
+  mesh: BracketMesh;
+  dims: GeneratedDimensions;
+  warnings: string[];
+  effective: EffectiveParams;
+  /** Pure-mm recipe the mesh was assembled from — serialised into the sidecar. */
+  recipe: SolidRecipe;
+  /** Deterministic hash of the welded solid, tying the sidecar to the serialised artifact. */
+  meshHash: string;
+}
+
+export type MeshResult = { ok: true } & GeometryBuild | { ok: false; error: GeometryError };
+
+// ---- Named, versioned generator constants (reviewer #2: no hidden fabrication values). ----
 
 /** Circle facet count — one value for every consumer keeps preview/STL/STEP identical. */
 export const SEGMENTS = 40;
-/** Illustrative wall/margin (mm) around the board footprint. */
+/** Wall/margin (mm) added around the board footprint or standoff bridge. */
 export const WALL_MM = 3;
 /** Minimum boss wall left around a bore before the bore is treated as escaping the standoff. */
 export const MIN_BOSS_WALL_MM = 0.6;
 /** Minimum bore radius (mm) that still tessellates to a non-degenerate ring. */
-const MIN_BORE_RADIUS_MM = 0.05;
+export const MIN_BORE_RADIUS_MM = 0.05;
+/** Side-tab footprint: width along the edge, depth outward, and its through-bore radius. */
+export const TAB_WIDTH_MM = 14;
+export const TAB_DEPTH_MM = 8;
+export const TAB_BORE_RADIUS_MM = 2;
+/** Arc segments emitted per filleted corner. */
+export const FILLET_SEGMENTS = 8;
+/** Vertex weld quantum (mm): positions rounded to this collapse to one welded vertex. */
+export const WELD_EPS_MM = 1e-4;
 
 const TOLERANCE_OFFSET: Record<Project["mount"]["tolerance"], number> = {
   "fdm-0.20": 0.2,
@@ -91,9 +185,15 @@ class Surface {
   private verts: number[] = [];
   private idx: number[] = [];
   private map = new Map<string, number>();
+  /** First triangulation failure encountered while capping a face, if any. */
+  faceError: string | null = null;
+  private readonly q: number;
 
+  constructor(weldEps: number) {
+    this.q = 1 / weldEps;
+  }
   private key(x: number, y: number, z: number): string {
-    const r = (n: number) => Math.round(n * 1e4);
+    const r = (n: number) => Math.round(n * this.q);
     return `${r(x)},${r(y)},${r(z)}`;
   }
   addVertex(x: number, y: number, z: number): number {
@@ -118,22 +218,39 @@ class Surface {
     this.triOut(p0, p1, p2, outward);
     this.triOut(p0, p2, p3, outward);
   }
-  /** Triangulate a 2D face (outer + holes) at height z; `up` sets the outward normal. */
-  addFace(outer: Pt[], holes: Pt[][], z: number, up: boolean): void {
-    const { vertices, triangles } = triangulate(outer, holes);
-    const outward: Vec3 = up ? [0, 0, 1] : [0, 0, -1];
-    for (const [a, b, c] of triangles) {
-      this.triOut([vertices[a].x, vertices[a].y, z], [vertices[b].x, vertices[b].y, z], [vertices[c].x, vertices[c].y, z], outward);
+  /** Triangulate a 2D face (outer + holes) at height z; `up` sets the outward normal.
+   *  Returns false and records `faceError` when triangulation fails closed. */
+  addFace(outer: Pt[], holes: Pt[][], z: number, up: boolean): boolean {
+    const tri = triangulate(outer, holes);
+    if (!tri.ok) {
+      if (!this.faceError) this.faceError = `${tri.code}: ${tri.message}`;
+      return false;
     }
+    const outward: Vec3 = up ? [0, 0, 1] : [0, 0, -1];
+    for (const [a, b, c] of tri.triangles) {
+      this.triOut([tri.vertices[a].x, tri.vertices[a].y, z], [tri.vertices[b].x, tri.vertices[b].y, z], [tri.vertices[c].x, tri.vertices[c].y, z], outward);
+    }
+    return true;
   }
-  /** A vertical wall around a ring from z0 to z1. `outwardAt(mid)` gives the solid's outward normal. */
-  addWall(ring: Pt[], z0: number, z1: number, outwardAt: (mid: Pt) => Vec3): void {
-    const n = ring.length;
+  /**
+   * A vertical wall around a ring from z0 to z1. The outward normal is derived from the
+   * edge direction and ring winding (reviewer #2), never a centroid: for a CCW ring the
+   * right-hand normal (dir.y,-dir.x) points away from the ring interior. `solidInside`
+   * selects the sign — true when material is inside the ring (outer plate / standoff wall),
+   * false when the ring bounds a void (bore / keep-out) so the wall faces into the void.
+   */
+  addWall(ring: Pt[], z0: number, z1: number, solidInside: boolean): void {
+    const r = ccw(ring);
+    const n = r.length;
+    const s = solidInside ? 1 : -1;
     for (let i = 0; i < n; i++) {
-      const a = ring[i];
-      const b = ring[(i + 1) % n];
-      const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-      this.quadOut([a.x, a.y, z0], [b.x, b.y, z0], [b.x, b.y, z1], [a.x, a.y, z1], outwardAt(mid));
+      const a = r[i];
+      const b = r[(i + 1) % n];
+      const dx = b.x - a.x;
+      const dy = b.y - a.y;
+      const len = Math.hypot(dx, dy) || 1;
+      const outward: Vec3 = [(dy / len) * s, (-dx / len) * s, 0];
+      this.quadOut([a.x, a.y, z0], [b.x, b.y, z0], [b.x, b.y, z1], [a.x, a.y, z1], outward);
     }
   }
   build(name: string): BodyMesh {
@@ -150,64 +267,82 @@ function cross(a: Vec3, b: Vec3): Vec3 {
 function dot(a: Vec3, b: Vec3): number {
   return a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
 }
-function centroid(ring: Pt[]): Pt {
-  let x = 0;
-  let y = 0;
-  for (const p of ring) {
-    x += p.x;
-    y += p.y;
-  }
-  return { x: x / ring.length, y: y / ring.length };
-}
-function norm2(x: number, y: number): Vec3 {
-  const l = Math.hypot(x, y) || 1;
-  return [x / l, y / l, 0];
-}
 
 // ----------------------------------------------------------------------------
-// Input resolution (honest — no silent invention).
+// Real corner fillet (reviewer #2: a true circular arc from the requested radius).
 // ----------------------------------------------------------------------------
 
-function fail(code: string, message: string, feature?: string): { ok: false; error: GeometryError } {
-  return { ok: false, error: feature ? { code, message, feature } : { code, message } };
-}
-
-/** Round a plate corner into an arc; only convex corners are filleted. */
-function filletRing(ring: Pt[], radius: number, seg = 6): Pt[] {
-  if (radius <= 0) return ring;
+/**
+ * Round convex corners of a CCW ring into true circular arcs of the requested radius,
+ * clamping the tangent setback to half the shorter adjacent edge. Returns the new ring plus
+ * a per-corner report of requested-vs-effective radius (clamped corners are recorded, not
+ * silently reported as the requested value). Concave corners are passed through unchanged.
+ */
+function filletRing(ring: Pt[], radius: number, seg = FILLET_SEGMENTS): { ring: Pt[]; corners: CornerReport[] } {
   const r = ccw(ring);
   const n = r.length;
   const out: Pt[] = [];
+  const corners: CornerReport[] = [];
+  if (radius <= 0) return { ring: r, corners };
   for (let i = 0; i < n; i++) {
     const prev = r[(i - 1 + n) % n];
     const cur = r[i];
     const next = r[(i + 1) % n];
-    const v1 = norm2(prev.x - cur.x, prev.y - cur.y);
-    const v2 = norm2(next.x - cur.x, next.y - cur.y);
-    const convex = v1[0] * v2[1] - v1[1] * v2[0] < 0; // CCW interior turn
+    const u1 = unit(prev.x - cur.x, prev.y - cur.y); // toward prev
+    const u2 = unit(next.x - cur.x, next.y - cur.y); // toward next
+    const face = u1.x * u2.y - u1.y * u2.x; // <0 at a convex corner of a CCW ring
     const e1 = Math.hypot(prev.x - cur.x, prev.y - cur.y);
     const e2 = Math.hypot(next.x - cur.x, next.y - cur.y);
-    const t = Math.min(radius, e1 / 2.5, e2 / 2.5);
-    if (!convex || t < 1e-3) {
+    if (face >= -1e-9) {
+      out.push(cur); // reflex or straight — no fillet
+      continue;
+    }
+    // Interior half-angle between the two edges.
+    const cosT = Math.max(-1, Math.min(1, u1.x * u2.x + u1.y * u2.y));
+    const halfT = Math.acos(cosT) / 2;
+    const tanHalf = Math.tan(halfT);
+    const tReq = radius / tanHalf; // setback for the requested radius
+    const tMax = Math.min(e1, e2) / 2;
+    const t = Math.min(tReq, tMax);
+    const rEff = t * tanHalf;
+    const clamped = rEff < radius - 1e-6;
+    corners.push({ requestedRadiusMm: radius, effectiveRadiusMm: round4(rEff), clamped });
+    if (t < 1e-4) {
       out.push(cur);
       continue;
     }
-    const p1 = { x: cur.x + v1[0] * t, y: cur.y + v1[1] * t };
-    const p2 = { x: cur.x + v2[0] * t, y: cur.y + v2[1] * t };
-    for (let s = 0; s <= seg; s++) {
-      const u = s / seg;
-      // Quadratic Bézier corner through the tangent points and the vertex.
-      const x = (1 - u) * (1 - u) * p1.x + 2 * (1 - u) * u * cur.x + u * u * p2.x;
-      const y = (1 - u) * (1 - u) * p1.y + 2 * (1 - u) * u * cur.y + u * u * p2.y;
-      out.push({ x, y });
+    const p1 = { x: cur.x + u1.x * t, y: cur.y + u1.y * t };
+    const p2 = { x: cur.x + u2.x * t, y: cur.y + u2.y * t };
+    // Arc centre: along the interior bisector at distance rEff / sin(halfT) from the corner.
+    const bis = unit(u1.x + u2.x, u1.y + u2.y);
+    const cDist = rEff / Math.sin(halfT);
+    const centre = { x: cur.x + bis.x * cDist, y: cur.y + bis.y * cDist };
+    let a1 = Math.atan2(p1.y - centre.y, p1.x - centre.x);
+    let a2 = Math.atan2(p2.y - centre.y, p2.x - centre.x);
+    // Sweep the short way (the arc subtends π - interiorAngle ≤ π).
+    let d = a2 - a1;
+    while (d > Math.PI) d -= 2 * Math.PI;
+    while (d < -Math.PI) d += 2 * Math.PI;
+    for (let sIdx = 0; sIdx <= seg; sIdx++) {
+      const a = a1 + (d * sIdx) / seg;
+      out.push({ x: centre.x + rEff * Math.cos(a), y: centre.y + rEff * Math.sin(a) });
     }
+    void a2;
   }
-  return out;
+  return { ring: out, corners };
 }
 
-/** Splice an outward rectangular tab onto the plate ring at the point nearest `anchor`. */
-function spliceTab(ring: Pt[], anchor: Pt, outward: Vec3, width: number, depth: number): Pt[] {
-  // Find the edge whose midpoint is nearest the anchor direction and insert a bump.
+function unit(x: number, y: number): Pt {
+  const l = Math.hypot(x, y) || 1;
+  return { x: x / l, y: y / l };
+}
+
+// ----------------------------------------------------------------------------
+// Side tabs — each tab and its bore share ONE edge-local frame (reviewer #2).
+// ----------------------------------------------------------------------------
+
+/** Index of the ring edge whose midpoint is nearest `anchor`. */
+function nearestEdge(ring: Pt[], anchor: Pt): number {
   let best = 0;
   let bestD = Infinity;
   for (let i = 0; i < ring.length; i++) {
@@ -220,17 +355,35 @@ function spliceTab(ring: Pt[], anchor: Pt, outward: Vec3, width: number, depth: 
       best = i;
     }
   }
-  const a = ring[best];
-  const b = ring[(best + 1) % ring.length];
-  const dir = norm2(b.x - a.x, b.y - a.y);
+  return best;
+}
+
+/**
+ * Splice an outward rectangular tab onto edge `edgeIndex` and derive its bore centre from
+ * the SAME edge-local frame (edge tangent + winding normal). Returns null when the finished
+ * ring would self-intersect or the bore would fall outside the tab, so the caller drops the
+ * tab with a warning rather than emitting bad geometry.
+ */
+function makeTab(ring: Pt[], edgeIndex: number, width: number, depth: number, boreR: number): { ring: Pt[]; boreCenter: Pt } | null {
+  const r = ccw(ring);
+  const n = r.length;
+  const a = r[edgeIndex];
+  const b = r[(edgeIndex + 1) % n];
+  const len = Math.hypot(b.x - a.x, b.y - a.y);
+  if (len < 1e-6) return null;
+  const dir = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
+  const nrm = { x: dir.y, y: -dir.x }; // outward for a CCW ring
+  const half = Math.min(width / 2, len / 2.2);
   const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
-  const half = Math.min(width / 2, Math.hypot(b.x - a.x, b.y - a.y) / 2.2);
-  const i1 = { x: mid.x - dir[0] * half, y: mid.y - dir[1] * half };
-  const i2 = { x: mid.x + dir[0] * half, y: mid.y + dir[1] * half };
-  const o1 = { x: i1.x + outward[0] * depth, y: i1.y + outward[1] * depth };
-  const o2 = { x: i2.x + outward[0] * depth, y: i2.y + outward[1] * depth };
-  // Insert i1, o1, o2, i2 after vertex `best`.
-  return [...ring.slice(0, best + 1), i1, o1, o2, i2, ...ring.slice(best + 1)];
+  const i1 = { x: mid.x - dir.x * half, y: mid.y - dir.y * half };
+  const i2 = { x: mid.x + dir.x * half, y: mid.y + dir.y * half };
+  const o1 = { x: i1.x + nrm.x * depth, y: i1.y + nrm.y * depth };
+  const o2 = { x: i2.x + nrm.x * depth, y: i2.y + nrm.y * depth };
+  const boreCenter = { x: mid.x + nrm.x * (depth / 2), y: mid.y + nrm.y * (depth / 2) };
+  const newRing = [...r.slice(0, edgeIndex + 1), i1, o1, o2, i2, ...r.slice(edgeIndex + 1)];
+  if (!isSimpleRing(newRing)) return null;
+  if (!pointInRingStrict(boreCenter, newRing, boreR + CONTACT_EPS)) return null; // bore must sit inside the tab
+  return { ring: newRing, boreCenter };
 }
 
 function boreDiameter(holeDiameter: number, clearance: number, tolOffset: number, style: Project["mount"]["fastenerStyle"]): number {
@@ -239,8 +392,65 @@ function boreDiameter(holeDiameter: number, clearance: number, tolOffset: number
   return clearBore;
 }
 
+function fail(code: string, message: string, feature?: string): { ok: false; error: GeometryError } {
+  return { ok: false, error: feature ? { code, message, feature } : { code, message } };
+}
+
 // ----------------------------------------------------------------------------
-// Build.
+// Assemble the solid from a pure-mm recipe. Shared by generation and by
+// reconstruction-from-sidecar, so the sidecar recipe provably rebuilds the same mesh.
+// ----------------------------------------------------------------------------
+
+export function assembleSolid(recipe: SolidRecipe): { ok: true; mesh: BracketMesh } | { ok: false; error: GeometryError } {
+  const { plate, baseZ0, baseZ1, topZ, standoffs, keepOutHoles, tabBores, segments, weldEpsMm } = recipe;
+  const s = new Surface(weldEpsMm);
+
+  const standoffOuter = standoffs.map((so) => circleRing(so.center.x, so.center.y, so.bossR, segments));
+  const standoffBore = standoffs.map((so) => circleRing(so.center.x, so.center.y, so.boreR, segments));
+  const throughBoreRings = standoffs.map((so, i) => (so.through ? standoffBore[i] : null)).filter((r): r is Pt[] => r != null);
+  const tabBoreRings = tabBores.map((t) => circleRing(t.center.x, t.center.y, t.r, segments));
+  const keepHoles = keepOutHoles.map((k) => ccw(k));
+
+  // Top plate face: plate minus standoff outer circles, keep-outs, tab bores.
+  s.addFace(plate, [...standoffOuter.map((r) => ccw(r)), ...keepHoles, ...tabBoreRings.map((r) => ccw(r))], baseZ1, true);
+  // Bottom plate face: plate minus keep-outs, through bores, tab bores (blind bores don't perforate).
+  s.addFace(plate, [...keepHoles, ...throughBoreRings.map((r) => ccw(r)), ...tabBoreRings.map((r) => ccw(r))], baseZ0, false);
+
+  // Outer plate wall (solid is inside the plate boundary).
+  s.addWall(plate, baseZ0, baseZ1, true);
+  // Keep-out walls (void inside the ring).
+  for (const k of keepHoles) s.addWall(k, baseZ0, baseZ1, false);
+  // Tab bore walls (through the plate; void inside the bore).
+  tabBoreRings.forEach((r) => s.addWall(r, baseZ0, baseZ1, false));
+
+  // Standoffs.
+  standoffs.forEach((so, i) => {
+    const outer = standoffOuter[i];
+    const bore = standoffBore[i];
+    s.addWall(outer, baseZ1, topZ, true); // outer wall (solid inside)
+    s.addFace(outer, [ccw(bore)], topZ, true); // top annulus [bore..outer]
+    if (so.through) {
+      s.addWall(bore, baseZ0, topZ, false); // through bore wall (void inside)
+    } else {
+      s.addWall(bore, baseZ1, topZ, false); // blind bore wall
+      s.addFace(bore, [], baseZ1, true); // blind bore floor
+    }
+  });
+
+  if (s.faceError) return fail("TRIANGULATION_FAILED", `A plate or standoff face could not be triangulated. ${s.faceError}`);
+
+  const body = s.build("bracket");
+  const mesh = combine([body]);
+  if (mesh.triangleCount === 0) return fail("EMPTY_SOLID", "Generation produced no geometry.");
+
+  const audit = auditMesh(mesh);
+  if (!audit.ok) return fail(audit.code, `Generated solid failed the manifold audit (${audit.message}). This is a generator bug or an unsupported input combination — nothing was serialised.`);
+
+  return { ok: true, mesh };
+}
+
+// ----------------------------------------------------------------------------
+// Build from the canonical model.
 // ----------------------------------------------------------------------------
 
 export function buildBracketMesh(project: Project): MeshResult {
@@ -258,8 +468,7 @@ export function buildBracketMesh(project: Project): MeshResult {
   const standoffH = maybe(m.standoffHeightMm);
   const boss = maybe(m.bossDiameterMm);
   const clearance = maybe(m.clearanceMm);
-  // No silent invention: an unknown fabrication dimension blocks generation with a
-  // diagnosable error rather than defaulting to zero or a guessed size.
+  // No silent invention: an unknown fabrication dimension blocks generation.
   if (base == null) return fail("MISSING_MOUNT_HEIGHT", "Base thickness is not set.", "base thickness");
   if (standoffH == null) return fail("MISSING_MOUNT_HEIGHT", "Standoff height is not set.", "standoff height");
   if (boss == null) return fail("MISSING_BOSS", "Boss diameter is not set; the standoff wall cannot be sized.", "boss diameter");
@@ -274,7 +483,7 @@ export function buildBracketMesh(project: Project): MeshResult {
   const warnings: string[] = [];
 
   // Per-hole bores, validated against the boss wall — never silently resized.
-  const standoffs: EffectiveParams["standoffs"] = [];
+  const standoffs: StandoffReport[] = [];
   const seats: Pt[] = [];
   for (const h of project.board.holes) {
     const d = maybe(h.diameterMm);
@@ -291,7 +500,7 @@ export function buildBracketMesh(project: Project): MeshResult {
         h.label,
       );
     const c = pxPointToBoardMm(h.centerPx, frame);
-    standoffs.push({ label: h.label, centerMm: c, boreDiameterMm: boreD, through });
+    standoffs.push({ label: h.label, centerMm: c, requestedDiameterMm: valOrNull(h.diameterMm, d), bossDiameterMm: boss, boreDiameterMm: boreD, through });
     seats.push(c);
   }
 
@@ -300,133 +509,154 @@ export function buildBracketMesh(project: Project): MeshResult {
     for (let j = i + 1; j < standoffs.length; j++) {
       const a = standoffs[i].centerMm;
       const b = standoffs[j].centerMm;
-      if (Math.hypot(a.x - b.x, a.y - b.y) < 2 * bossR - 1e-6) {
+      if (Math.hypot(a.x - b.x, a.y - b.y) < 2 * bossR + CONTACT_EPS) {
         return fail(
           "BOSS_OVERLAP",
-          `${standoffs[i].label} and ${standoffs[j].label} bosses overlap (⌀${boss.toFixed(2)} mm too large for their spacing). Increase spacing or reduce the boss diameter.`,
+          `${standoffs[i].label} and ${standoffs[j].label} bosses overlap or touch (⌀${boss.toFixed(2)} mm too large for their spacing). Increase spacing or reduce the boss diameter.`,
           standoffs[i].label,
         );
       }
     }
   }
 
-  // ---- Plate footprint (per strategy) ----
+  // ---- Plate footprint (per strategy). A footprint that cannot be built safely is a coded
+  // error, never a silent fallback to another strategy (reviewer #2). ----
   const wall = WALL_MM;
   let plate: Pt[];
+  let plateOffsetMm = 0;
+  let requestedOutlineMm: Pt[] | null = null;
   if (m.kind === "rect-plate") {
-    plate = rectRing(-wall, -wall, dims.widthMm + wall, dims.heightMm + wall);
+    plate = rectRingLocal(-wall, -wall, dims.widthMm + wall, dims.heightMm + wall);
   } else if (m.kind === "standoff-bridge") {
-    // A minimal bridge: the convex hull of the standoff seats, grown by boss + wall.
-    const hull = convexHull(seats.length >= 3 ? seats : [...seats, { x: seats[0].x + 1, y: seats[0].y }, { x: seats[0].x, y: seats[0].y + 1 }]);
-    plate = offsetRingOutward(hull, bossR + wall) ?? rectRing(-wall, -wall, dims.widthMm + wall, dims.heightMm + wall);
+    // Footprint derived purely from the real seats: the convex hull of every boss+wall
+    // circle. For 1 seat this is a disc, for 2 a stadium, for ≥3 a rounded hull — no
+    // fictitious semantic points are ever invented.
+    const ringPts = seats.flatMap((c) => circleRing(c.x, c.y, bossR + wall, SEGMENTS));
+    plate = convexHull(ringPts);
+    plateOffsetMm = bossR + wall;
+    if (plate.length < 3 || !isSimpleRing(plate)) return fail("BRIDGE_FOOTPRINT_FAILED", "Could not build a standoff-bridge footprint from the mounting seats.");
   } else {
     // plate-standoffs: the board outline, offset outward by the wall margin.
-    const outline = project.board.outline!.vertices.map((v) => pxPointToBoardMm(v, frame));
-    plate = offsetRingOutward(ccw(outline), wall) ?? rectRing(-wall, -wall, dims.widthMm + wall, dims.heightMm + wall);
+    const outline = ccw(project.board.outline!.vertices.map((v) => pxPointToBoardMm(v, frame)));
+    requestedOutlineMm = outline.map((p) => ({ x: p.x, y: p.y }));
+    if (!isSimpleRing(outline)) return fail("OUTLINE_NOT_SIMPLE", "The board outline self-intersects; it cannot be offset into a plate. Fix the outline before generating.", "outline");
+    const offset = offsetRingOutward(outline, wall);
+    if (!offset) return fail("OUTLINE_OFFSET_FAILED", "The board outline could not be offset into a plate without self-intersecting (a concave notch is narrower than the wall). Choose the rectangular or standoff-bridge strategy, or simplify the outline.", "outline");
+    plate = offset;
+    plateOffsetMm = wall;
   }
 
-  // Corner radius (from the outline's Val, when known).
+  // Corner radius (from the outline's Val, when known) — a real circular fillet.
   const cornerRadius = isKnown(project.board.outline!.cornerRadiusMm) ? project.board.outline!.cornerRadiusMm.value : 0;
-  if (cornerRadius > 0) plate = filletRing(plate, cornerRadius);
+  let corners: CornerReport[] = [];
+  if (cornerRadius > 0) {
+    const filleted = filletRing(plate, cornerRadius);
+    plate = filleted.ring;
+    corners = filleted.corners;
+    const clampedCount = corners.filter((c) => c.clamped).length;
+    if (clampedCount > 0) warnings.push(`Corner radius clamped on ${clampedCount} corner${clampedCount > 1 ? "s" : ""} to fit the adjacent edges — see per-corner effective radii in the export sidecar.`);
+  }
 
-  // ---- Side tabs (spliced onto the plate boundary; each with a through bore) ----
-  const bb = { x0: -wall, y0: -wall, x1: dims.widthMm + wall, y1: dims.heightMm + wall };
+  // ---- Side tabs (spliced onto the plate boundary; each with a through bore). Each tab and
+  // its bore share one edge-local frame; a tab that cannot be placed cleanly is skipped. ----
+  const bb = boundingBoxLocal(plate);
   const cx = (bb.x0 + bb.x1) / 2;
   const cy = (bb.y0 + bb.y1) / 2;
-  const tabW = Math.min(14, (bb.x1 - bb.x0) * 0.28);
-  const tabD = 8;
+  const tabReports: TabReport[] = [];
   const tabBores: { center: Pt; r: number }[] = [];
-  if (m.sideTabs >= 2) {
-    plate = spliceTab(plate, { x: cx, y: bb.y0 }, [0, -1, 0], tabW, tabD);
-    plate = spliceTab(plate, { x: cx, y: bb.y1 }, [0, 1, 0], tabW, tabD);
-    tabBores.push({ center: { x: cx, y: bb.y0 - tabD / 2 }, r: 2 }, { center: { x: cx, y: bb.y1 + tabD / 2 }, r: 2 });
-    if (m.sideTabs >= 4) {
-      plate = spliceTab(plate, { x: bb.x0, y: cy }, [-1, 0, 0], tabW, tabD);
-      plate = spliceTab(plate, { x: bb.x1, y: cy }, [1, 0, 0], tabW, tabD);
-      tabBores.push({ center: { x: bb.x0 - tabD / 2, y: cy }, r: 2 }, { center: { x: bb.x1 + tabD / 2, y: cy }, r: 2 });
+  const anchors: Pt[] = [];
+  if (m.sideTabs >= 2) anchors.push({ x: cx, y: bb.y0 }, { x: cx, y: bb.y1 });
+  if (m.sideTabs >= 4) anchors.push({ x: bb.x0, y: cy }, { x: bb.x1, y: cy });
+  for (const anchor of anchors) {
+    const edge = nearestEdge(plate, anchor);
+    const tab = makeTab(plate, edge, TAB_WIDTH_MM, TAB_DEPTH_MM, TAB_BORE_RADIUS_MM);
+    if (!tab) {
+      warnings.push("A side tab could not be placed on the selected edge without self-intersecting and was skipped.");
+      continue;
     }
+    plate = tab.ring;
+    tabBores.push({ center: tab.boreCenter, r: TAB_BORE_RADIUS_MM });
+    tabReports.push({ edgeIndex: edge, widthMm: TAB_WIDTH_MM, depthMm: TAB_DEPTH_MM, boreCenterMm: tab.boreCenter, boreRadiusMm: TAB_BORE_RADIUS_MM });
   }
 
-  // Every standoff seat must sit on the plate, or the standoff would float disconnected.
-  for (const so of standoffs) {
-    if (!pointInRing(so.centerMm, plate)) {
-      return fail("STANDOFF_OFF_PLATE", `${so.label} lies outside the plate footprint; move it onto the board or widen the plate.`, so.label);
+  if (!isSimpleRing(plate)) return fail("PLATE_NOT_SIMPLE", "The plate outline self-intersects after applying corner radius/tabs.");
+
+  // Every standoff boss and tab bore must sit wholly inside the plate — not merely its
+  // centre (reviewer #1: a boss centre can be inside while its rim crosses the boundary).
+  const standoffOuterRings = standoffs.map((so) => circleRing(so.centerMm.x, so.centerMm.y, bossR, SEGMENTS));
+  for (let i = 0; i < standoffs.length; i++) {
+    if (!ringContainsRing(plate, standoffOuterRings[i])) {
+      return fail("STANDOFF_OFF_PLATE", `${standoffs[i].label}'s boss is not wholly inside the plate footprint; move it inward or widen the plate.`, standoffs[i].label);
     }
   }
-
-  const baseZ0 = 0;
-  const baseZ1 = base;
-  const topZ = base + standoffH;
-  const standoffOuter = standoffs.map((so) => circleRing(so.centerMm.x, so.centerMm.y, bossR, SEGMENTS));
-  const standoffBore = standoffs.map((so) => circleRing(so.centerMm.x, so.centerMm.y, so.boreDiameterMm / 2, SEGMENTS));
-  const throughBoreRings = standoffs.map((so, i) => (so.through ? standoffBore[i] : null)).filter((r): r is Pt[] => r != null);
   const tabBoreRings = tabBores.map((t) => circleRing(t.center.x, t.center.y, t.r, SEGMENTS));
+  for (let i = 0; i < tabBoreRings.length; i++) {
+    if (!ringContainsRing(plate, tabBoreRings[i])) return fail("TAB_BORE_OFF_PLATE", "A side-tab bore is not wholly inside the plate.");
+  }
+
+  // Every mandatory feature ring must be pairwise-separated (tangent included) so no two
+  // welded rims pinch the manifold (reviewer #1).
+  const mandatory = [...standoffOuterRings, ...tabBoreRings];
+  for (let i = 0; i < mandatory.length; i++) {
+    for (let j = i + 1; j < mandatory.length; j++) {
+      if (!ringsSeparated(mandatory[i], mandatory[j])) {
+        return fail("FEATURE_RING_CONTACT", "Two mounting/tab features touch or overlap on the plate; increase their spacing.");
+      }
+    }
+  }
 
   // ---- Keep-outs: subtract interior footprints as through-holes. A hole that leaves the
-  // plate, or overlaps a boss/tab bore or an already-subtracted keep-out, is warned and
-  // skipped — holes must stay disjoint for the plate to triangulate to a single manifold.
-  const mandatoryHoles = [...standoffOuter, ...tabBoreRings];
+  // plate, or touches a boss/tab bore or an already-subtracted keep-out, is warned + skipped
+  // — holes must stay disjoint for the plate to triangulate to a single manifold. ----
+  const keepReports: KeepOutReport[] = [];
   const keepoutHoles: Pt[][] = [];
   for (const k of project.board.keepOuts) {
     const ring = keepOutRing(k, frame);
-    if (!ring) continue;
+    if (!ring) {
+      keepReports.push({ label: k.label, subtracted: false, reason: "no usable footprint" });
+      continue;
+    }
     const r = ccw(ring);
-    if (!r.every((p) => pointInRing(p, plate))) {
+    if (!isSimpleRing(r)) {
+      warnings.push(`${k.label} has a self-intersecting footprint — it was not subtracted.`);
+      keepReports.push({ label: k.label, subtracted: false, reason: "self-intersecting footprint" });
+      continue;
+    }
+    if (!ringContainsRing(plate, r)) {
       warnings.push(`${k.label} extends past the plate edge — its footprint was not subtracted.`);
+      keepReports.push({ label: k.label, subtracted: false, reason: "extends past the plate edge" });
       continue;
     }
-    if (mandatoryHoles.some((h) => ringsOverlap(r, h))) {
-      warnings.push(`${k.label} overlaps a standoff or tab bore — its footprint was not subtracted.`);
+    if (mandatory.some((h) => !ringsSeparated(r, h))) {
+      warnings.push(`${k.label} touches a standoff or tab bore — its footprint was not subtracted.`);
+      keepReports.push({ label: k.label, subtracted: false, reason: "touches a standoff or tab bore" });
       continue;
     }
-    if (keepoutHoles.some((h) => ringsOverlap(r, h))) {
+    if (keepoutHoles.some((h) => !ringsSeparated(r, h))) {
       warnings.push(`${k.label} overlaps another keep-out — only the first of the overlap was subtracted.`);
+      keepReports.push({ label: k.label, subtracted: false, reason: "overlaps another keep-out" });
       continue;
     }
     keepoutHoles.push(r);
+    keepReports.push({ label: k.label, subtracted: true, reason: null });
   }
 
-  // ---- Build the single manifold ----
-  const s = new Surface();
-
-  // Top plate face: plate minus standoff outer circles, keep-outs, tab bores.
-  s.addFace(plate, [...standoffOuter.map((r) => ccw(r)), ...keepoutHoles, ...tabBoreRings.map((r) => ccw(r))], baseZ1, true);
-  // Bottom plate face: plate minus keep-outs, through bores, tab bores (blind bores don't perforate).
-  s.addFace(plate, [...keepoutHoles, ...throughBoreRings.map((r) => ccw(r)), ...tabBoreRings.map((r) => ccw(r))], baseZ0, false);
-
-  // Outer plate wall (right-normal of the CCW boundary points outward).
-  const pc = centroid(plate);
-  s.addWall(ccw(plate), baseZ0, baseZ1, (mid) => norm2(mid.x - pc.x, mid.y - pc.y));
-  // Keep-out walls (face into the hole).
-  for (const k of keepoutHoles) {
-    const kc = centroid(k);
-    s.addWall(k, baseZ0, baseZ1, (mid) => norm2(kc.x - mid.x, kc.y - mid.y));
-  }
-  // Tab bore walls (through the plate; face into the bore).
-  tabBores.forEach((t, i) => s.addWall(tabBoreRings[i], baseZ0, baseZ1, (mid) => norm2(t.center.x - mid.x, t.center.y - mid.y)));
-
-  // Standoffs.
-  standoffs.forEach((so, i) => {
-    const outer = standoffOuter[i];
-    const bore = standoffBore[i];
-    const c = so.centerMm;
-    // Outer wall base->top (faces outward from the axis).
-    s.addWall(outer, baseZ1, topZ, (mid) => norm2(mid.x - c.x, mid.y - c.y));
-    // Top annulus [bore..outer] at topZ, facing up.
-    s.addFace(outer, [ccw(bore)], topZ, true);
-    if (so.through) {
-      // Through bore wall 0->top (faces into the bore).
-      s.addWall(bore, baseZ0, topZ, (mid) => norm2(c.x - mid.x, c.y - mid.y));
-    } else {
-      // Blind bore wall base->top + a floor disk at base facing up.
-      s.addWall(bore, baseZ1, topZ, (mid) => norm2(c.x - mid.x, c.y - mid.y));
-      s.addFace(bore, [], baseZ1, true);
-    }
-  });
-
-  const body = s.build("bracket");
-  const mesh = combine([body]);
-  if (mesh.triangleCount === 0) return fail("EMPTY_SOLID", "Generation produced no geometry.");
+  // ---- Assemble + audit the single manifold from a pure-mm recipe. ----
+  const recipe: SolidRecipe = {
+    plate: plate.map((p) => ({ x: p.x, y: p.y })),
+    baseZ0: 0,
+    baseZ1: base,
+    topZ: base + standoffH,
+    standoffs: standoffs.map((so) => ({ center: { x: so.centerMm.x, y: so.centerMm.y }, bossR, boreR: so.boreDiameterMm / 2, through: so.through })),
+    keepOutHoles: keepoutHoles.map((k) => k.map((p) => ({ x: p.x, y: p.y }))),
+    tabBores: tabBores.map((t) => ({ center: { x: t.center.x, y: t.center.y }, r: t.r })),
+    segments: SEGMENTS,
+    weldEpsMm: WELD_EPS_MM,
+  };
+  const assembled = assembleSolid(recipe);
+  if (!assembled.ok) return assembled;
+  const mesh = assembled.mesh;
+  const meshHash = hashMesh(mesh);
 
   const bboxDims = mesh.bbox;
   const genDims: GeneratedDimensions = {
@@ -448,8 +678,17 @@ export function buildBracketMesh(project: Project): MeshResult {
     clearanceMm: valOf(project.mount.clearanceMm, clearance),
     toleranceOffsetMm: tolOffset,
     cornerRadiusMm: cornerRadius,
+    corners,
     wallMm: wall,
+    plateOffsetMm,
+    segments: SEGMENTS,
+    weldToleranceMm: WELD_EPS_MM,
+    contactToleranceMm: CONTACT_EPS,
     sideTabs: m.sideTabs,
+    tabs: tabReports,
+    plateOutlineMm: recipe.plate,
+    requestedOutlineMm,
+    keepOuts: keepReports,
     standoffs,
   };
   const inferredNames = [
@@ -462,14 +701,169 @@ export function buildBracketMesh(project: Project): MeshResult {
     .map(([n]) => n as string);
   if (inferredNames.length > 0) warnings.push(`Inferred fabrication dimensions (confirm before trusting the fit): ${inferredNames.join(", ")}.`);
 
-  return { ok: true, mesh, dims: genDims, warnings, effective };
+  return { ok: true, mesh, dims: genDims, warnings, effective, recipe, meshHash };
 }
+
+// ---- production fail-closed audit ----
+
+interface AuditFail {
+  ok: false;
+  code: string;
+  message: string;
+}
+
+/**
+ * Verify a mesh is a single connected, watertight, consistently-oriented, vertex-manifold
+ * solid of positive volume. Runs in production before any success is returned (reviewer #1).
+ */
+export function auditMesh(mesh: BracketMesh): { ok: true; components: number } | AuditFail {
+  const p = mesh.positions;
+  const idx = mesh.indices;
+  const vCount = p.length / 3;
+  const tCount = idx.length / 3;
+  if (tCount === 0) return { ok: false, code: "EMPTY_SOLID", message: "no triangles" };
+
+  for (let i = 0; i < p.length; i++) if (!Number.isFinite(p[i])) return { ok: false, code: "NON_FINITE", message: "a coordinate is not finite" };
+  for (let i = 0; i < idx.length; i++) if (idx[i] >= vCount) return { ok: false, code: "BAD_INDEX", message: "a triangle index is out of range" };
+
+  // Directed-edge bookkeeping for watertightness + orientation + vertex fans.
+  const dirCount = new Map<string, number>(); // "a>b" -> count
+  const undir = new Map<string, number>(); // "min_max" -> uses
+  const uf = new UnionFind(tCount);
+  const edgeToTri = new Map<string, number>(); // undirected edge -> a triangle that owns it
+  const vertexOpp = new Map<number, [number, number][]>(); // vertex -> opposite directed edges of its incident tris
+
+  let volume6 = 0;
+  for (let t = 0; t < tCount; t++) {
+    const a = idx[t * 3];
+    const b = idx[t * 3 + 1];
+    const c = idx[t * 3 + 2];
+    if (a === b || b === c || a === c) return { ok: false, code: "DEGENERATE_TRI", message: "a triangle repeats a vertex" };
+    const ax = p[a * 3], ay = p[a * 3 + 1], az = p[a * 3 + 2];
+    const bx = p[b * 3], by = p[b * 3 + 1], bz = p[b * 3 + 2];
+    const cx = p[c * 3], cy = p[c * 3 + 1], cz = p[c * 3 + 2];
+    // Nonzero area.
+    const nx = (by - ay) * (cz - az) - (bz - az) * (cy - ay);
+    const ny = (bz - az) * (cx - ax) - (bx - ax) * (cz - az);
+    const nz = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+    if (Math.hypot(nx, ny, nz) < 1e-9) return { ok: false, code: "ZERO_AREA_TRI", message: "a triangle has zero area" };
+    // Signed volume contribution (divergence theorem).
+    volume6 += ax * (by * cz - bz * cy) - ay * (bx * cz - bz * cx) + az * (bx * cy - by * cx);
+
+    const tris: [number, number][] = [
+      [a, b],
+      [b, c],
+      [c, a],
+    ];
+    for (const [x, y] of tris) {
+      dirCount.set(`${x}>${y}`, (dirCount.get(`${x}>${y}`) ?? 0) + 1);
+      const uk = x < y ? `${x}_${y}` : `${y}_${x}`;
+      undir.set(uk, (undir.get(uk) ?? 0) + 1);
+      const owner = edgeToTri.get(uk);
+      if (owner === undefined) edgeToTri.set(uk, t);
+      else uf.union(owner, t);
+    }
+    // Opposite directed edge per triangle vertex (for the one-ring fan test).
+    push2(vertexOpp, a, [b, c]);
+    push2(vertexOpp, b, [c, a]);
+    push2(vertexOpp, c, [a, b]);
+  }
+
+  // Watertight + consistently oriented: every undirected edge used exactly twice, once in
+  // each direction.
+  for (const [uk, uses] of undir) {
+    if (uses !== 2) return { ok: false, code: "NON_MANIFOLD_EDGE", message: `an edge is shared by ${uses} triangles (not 2)` };
+    const [lo, hi] = uk.split("_");
+    const f = dirCount.get(`${lo}>${hi}`) ?? 0;
+    const r = dirCount.get(`${hi}>${lo}`) ?? 0;
+    if (f !== 1 || r !== 1) return { ok: false, code: "INCONSISTENT_ORIENTATION", message: "an edge is not traversed once in each direction" };
+  }
+
+  // Single connected component.
+  const roots = new Set<number>();
+  for (let t = 0; t < tCount; t++) roots.add(uf.find(t));
+  if (roots.size !== 1) return { ok: false, code: "DISCONNECTED", message: `${roots.size} connected components (not 1)` };
+
+  // Vertex-manifold: the opposite edges around each vertex form ONE closed cycle (a single
+  // umbrella), so no two cones meet at a pinch vertex.
+  for (const [v, opp] of vertexOpp) {
+    const succ = new Map<number, number>();
+    for (const [s, e] of opp) {
+      if (succ.has(s)) return { ok: false, code: "NON_MANIFOLD_VERTEX", message: `vertex ${v} has a branching fan` };
+      succ.set(s, e);
+    }
+    // Follow the chain from any start; it must return to start after exactly opp.length steps.
+    const start = opp[0][0];
+    let cur = start;
+    let steps = 0;
+    while (steps < opp.length) {
+      const nxt = succ.get(cur);
+      if (nxt === undefined) return { ok: false, code: "NON_MANIFOLD_VERTEX", message: `vertex ${v} fan is open` };
+      cur = nxt;
+      steps++;
+      if (cur === start) break;
+    }
+    if (cur !== start || steps !== opp.length) return { ok: false, code: "NON_MANIFOLD_VERTEX", message: `vertex ${v} fan is not a single cycle` };
+  }
+
+  if (!(volume6 > 1e-9)) return { ok: false, code: "NON_POSITIVE_VOLUME", message: `signed volume ${(volume6 / 6).toFixed(6)} is not positive` };
+
+  return { ok: true, components: roots.size };
+}
+
+function push2(map: Map<number, [number, number][]>, v: number, e: [number, number]): void {
+  const cur = map.get(v);
+  if (cur) cur.push(e);
+  else map.set(v, [e]);
+}
+
+class UnionFind {
+  private parent: number[];
+  constructor(n: number) {
+    this.parent = Array.from({ length: n }, (_, i) => i);
+  }
+  find(x: number): number {
+    while (this.parent[x] !== x) {
+      this.parent[x] = this.parent[this.parent[x]];
+      x = this.parent[x];
+    }
+    return x;
+  }
+  union(a: number, b: number): void {
+    const ra = this.find(a);
+    const rb = this.find(b);
+    if (ra !== rb) this.parent[ra] = rb;
+  }
+}
+
+// ---- deterministic mesh hash (ties the sidecar to the serialised artifact) ----
+
+/** FNV-1a over the welded positions (rounded to the weld quantum) and triangle indices. */
+export function hashMesh(mesh: BracketMesh): string {
+  let h = 0x811c9dc5;
+  const mix = (n: number) => {
+    h ^= n & 0xff;
+    h = Math.imul(h, 0x01000193);
+    h ^= (n >>> 8) & 0xff;
+    h = Math.imul(h, 0x01000193);
+    h ^= (n >>> 16) & 0xff;
+    h = Math.imul(h, 0x01000193);
+    h ^= (n >>> 24) & 0xff;
+    h = Math.imul(h, 0x01000193);
+  };
+  const q = 1 / WELD_EPS_MM;
+  for (let i = 0; i < mesh.positions.length; i++) mix(Math.round(mesh.positions[i] * q) | 0);
+  for (let i = 0; i < mesh.indices.length; i++) mix(mesh.indices[i] | 0);
+  return (h >>> 0).toString(16).padStart(8, "0");
+}
+
+// ---- helpers ----
 
 function keepOutRing(k: KeepOut, frame: NonNullable<ReturnType<typeof boardFrame>>): Pt[] | null {
   if (k.shape === "rect" && k.rectPx) {
     const a = pxPointToBoardMm({ x: k.rectPx.x, y: k.rectPx.y }, frame);
     const b = pxPointToBoardMm({ x: k.rectPx.x + k.rectPx.w, y: k.rectPx.y + k.rectPx.h }, frame);
-    return rectRing(a.x, a.y, b.x, b.y);
+    return rectRingLocal(a.x, a.y, b.x, b.y);
   }
   if (k.shape === "circle" && k.circlePx) {
     const c = pxPointToBoardMm(k.circlePx.center, frame);
@@ -483,9 +877,33 @@ function keepOutRing(k: KeepOut, frame: NonNullable<ReturnType<typeof boardFrame
   return null;
 }
 
+function rectRingLocal(x0: number, y0: number, x1: number, y1: number): Pt[] {
+  return ccw([
+    { x: x0, y: y0 },
+    { x: x1, y: y0 },
+    { x: x1, y: y1 },
+    { x: x0, y: y1 },
+  ]);
+}
+
+function boundingBoxLocal(pts: Pt[]): { x0: number; y0: number; x1: number; y1: number } {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const p of pts) {
+    if (p.x < x0) x0 = p.x;
+    if (p.y < y0) y0 = p.y;
+    if (p.x > x1) x1 = p.x;
+    if (p.y > y1) y1 = p.y;
+  }
+  return { x0, y0, x1, y1 };
+}
+
 function valOf(v: Project["mount"]["baseThicknessMm"], value: number): EffectiveValue {
   const source = isKnown(v) ? v.source : "inferred";
   return { value, source };
+}
+
+function valOrNull(v: Project["board"]["holes"][number]["diameterMm"], value: number): EffectiveValue | null {
+  return isKnown(v) ? { value, source: v.source } : { value, source: "inferred" };
 }
 
 function combine(bodies: BodyMesh[]): BracketMesh {
@@ -519,4 +937,7 @@ function combine(bodies: BodyMesh[]): BracketMesh {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+function round4(n: number): number {
+  return Math.round(n * 1e4) / 1e4;
 }
