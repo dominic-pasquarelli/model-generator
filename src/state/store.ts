@@ -7,7 +7,7 @@
 import { create } from "zustand";
 import type { Point, Rect } from "@/core/geom";
 import { bbox, normalizeRect } from "@/core/geom";
-import { boardFrame, boardMmToPxPoint, generationKey, isGenerationCurrent } from "@/core/project/derive";
+import { boardFrame, boardMmToPxPoint, generationKey, inferredFabricationDims, isGenerationCurrent } from "@/core/project/derive";
 import { createSeedLibrary } from "@/core/project/fixtures";
 import { createProject, parseProjectFile, serializeProject, MgFileError } from "@/core/project/schema";
 import type {
@@ -60,6 +60,9 @@ export interface ExportUiState {
   open: boolean;
   format: ExportFormat;
   writeSidecar: boolean;
+  /** The user has acknowledged the inferred fabrication dimensions (reviewer #5C). Required
+   *  before export whenever any exported dimension is inferred rather than measured. */
+  acknowledgedInferred: boolean;
   phase: ExportPhase;
   progress: number;
   stage: string;
@@ -205,6 +208,7 @@ function freshExportUi(): ExportUiState {
     open: false,
     format: "step",
     writeSidecar: true,
+    acknowledgedInferred: false,
     phase: "idle",
     progress: 0,
     stage: "",
@@ -430,6 +434,8 @@ export interface AppState {
   closeExport: () => void;
   setExportFormat: (f: ExportFormat) => void;
   toggleSidecar: () => void;
+  /** Toggle the user's acknowledgement of inferred fabrication dimensions (reviewer #5C). */
+  toggleAckInferred: () => void;
   runExport: () => void;
   cancelExport: () => void;
   retryExport: () => void;
@@ -942,10 +948,14 @@ export const useStore = create<AppState>((set, get) => {
     },
     setExportFormat: (format) => set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, format } } })),
     toggleSidecar: () => set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, writeSidecar: !s.ui.export.writeSidecar } } })),
+    toggleAckInferred: () => set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, acknowledgedInferred: !s.ui.export.acknowledgedInferred } } })),
 
     runExport: () => {
       const current = get().current;
       if (!current) return;
+      // Honesty gate (reviewer #5C): never build an artifact carrying inferred fabrication
+      // dimensions the user has not explicitly acknowledged.
+      if (inferredFabricationDims(current).length > 0 && !get().ui.export.acknowledgedInferred) return;
       const projectId = current.id; // finalize must apply to THIS project, not whatever is current later
       // Honest stages reflecting real work: build the solid, serialise the body, sidecar.
       const stages = ["Building solid from the canonical model", `Serialising ${get().ui.export.format.toUpperCase()} body`];

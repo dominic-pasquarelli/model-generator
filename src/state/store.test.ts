@@ -347,6 +347,31 @@ describe("project file import/export", () => {
   });
 });
 
+describe("inferred fabrication dimensions require acknowledgement before export (reviewer #5C)", () => {
+  it("runExport does nothing until the inferred dimensions are acknowledged, then proceeds", async () => {
+    const p = openSample(); // the sample's mount defaults are inferred
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+    await useStore.getState().generate();
+
+    // Not acknowledged → the honesty gate blocks the build (no progress phase entered).
+    vi.useFakeTimers();
+    useStore.getState().runExport();
+    vi.advanceTimersByTime(3000);
+    vi.useRealTimers();
+    expect(useStore.getState().ui.export.phase).toBe("idle");
+    expect(useStore.getState().ui.export.artifact).toBeNull();
+
+    // Acknowledge, then it builds.
+    useStore.getState().toggleAckInferred();
+    vi.useFakeTimers();
+    useStore.getState().runExport();
+    vi.advanceTimersByTime(3000);
+    vi.useRealTimers();
+    expect(useStore.getState().ui.export.phase).toBe("complete");
+    expect(useStore.getState().ui.export.artifact).toBeTruthy();
+  });
+});
+
 describe("export is recorded only on download", () => {
   it("prepares an artifact without a history record; records only after download; edit un-currents it", async () => {
     const p = openSample();
@@ -354,6 +379,7 @@ describe("export is recorded only on download", () => {
     await useStore.getState().generate();
     expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
 
+    useStore.setState((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, acknowledgedInferred: true } } }));
     vi.useFakeTimers();
     useStore.getState().runExport();
     vi.advanceTimersByTime(3000);
@@ -378,6 +404,7 @@ describe("export is recorded only on download", () => {
 
 describe("undo/redo preserve the append-only export ledger (reviewer #4)", () => {
   function commitAnExport() {
+    useStore.setState((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, acknowledgedInferred: true } } }));
     vi.useFakeTimers();
     useStore.getState().runExport();
     vi.advanceTimersByTime(3000);

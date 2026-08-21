@@ -69,7 +69,13 @@ test("export flow reaches the complete state", async ({ page }) => {
   await expect(page.getByText("Readiness")).toBeVisible();
   await shot(page, "08-export-ready");
 
-  await page.getByRole("button", { name: /Export STEP/ }).click();
+  // The sample's mount defaults are inferred, so export is gated until acknowledged.
+  await expect(page.getByText(/Inferred fabrication dimensions \(\d+\)/)).toBeVisible();
+  const exportStep = page.getByRole("button", { name: /Export STEP/ });
+  await expect(exportStep).toBeDisabled();
+  await page.getByRole("checkbox", { name: /inferred defaults/ }).click();
+  await expect(exportStep).toBeEnabled();
+  await exportStep.click();
   // The artifact is prepared in memory; it is not yet recorded as exported.
   await expect(page.getByText("Artifact prepared")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(/Prepared in memory/)).toBeVisible();
@@ -82,6 +88,7 @@ test("closing the export dialog without downloading does not claim an export", a
   const exportBtn = page.getByRole("button", { name: "Export", exact: true });
   await expect(exportBtn).toBeEnabled({ timeout: 10_000 });
   await exportBtn.click();
+  await page.getByRole("checkbox", { name: /inferred defaults/ }).click();
   await page.getByRole("button", { name: /Export STEP/ }).click();
   await expect(page.getByText("Artifact prepared")).toBeVisible({ timeout: 15_000 });
 

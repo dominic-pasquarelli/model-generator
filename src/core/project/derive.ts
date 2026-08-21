@@ -191,6 +191,26 @@ export function isCurrentModelExported(project: Project): boolean {
   return key != null && project.exports.some((e) => e.generationKey === key);
 }
 
+/**
+ * Fabrication dimensions the generator will bake into the artifact that are INFERRED defaults
+ * rather than measured/confirmed (reviewer #5C). These are the "guessed" values the export
+ * honesty policy lists and makes the user acknowledge before download. Unknown values are NOT
+ * here — they block generation entirely and can never reach an export.
+ */
+export function inferredFabricationDims(project: Project): { label: string; valueMm: number }[] {
+  const out: { label: string; valueMm: number }[] = [];
+  const add = (label: string, v: Val<number>) => {
+    if (isKnown(v) && v.source === "inferred") out.push({ label, valueMm: v.value });
+  };
+  const m = project.mount;
+  add("Standoff height", m.standoffHeightMm);
+  add("Base thickness", m.baseThicknessMm);
+  add("Boss diameter", m.bossDiameterMm);
+  add("Fit clearance", m.clearanceMm);
+  if (project.board.outline) add("Corner radius", project.board.outline.cornerRadiusMm);
+  return out;
+}
+
 function numOrNull(v: Val<number> | undefined): number | null {
   if (!v) return null;
   const m = maybe(v);

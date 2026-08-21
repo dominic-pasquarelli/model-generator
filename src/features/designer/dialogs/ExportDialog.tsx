@@ -8,6 +8,8 @@ import { Icon } from "@/icons/Icon";
 import type { Project } from "@/core/project/types";
 import { exportReadiness } from "@/core/validation/validate";
 import { exportFileName } from "@/core/export/exporter";
+import { inferredFabricationDims } from "@/core/project/derive";
+import { fmtLen, unitLabel } from "@/core/units/units";
 import { hashLabel } from "@/lib/format";
 import { downloadArtifact, useStore } from "@/state/store";
 
@@ -20,6 +22,7 @@ export function ExportDialog({ project }: { project: Project }) {
   const cancelExport = useStore((s) => s.cancelExport);
   const retryExport = useStore((s) => s.retryExport);
   const commitExportDownload = useStore((s) => s.commitExportDownload);
+  const toggleAckInferred = useStore((s) => s.toggleAckInferred);
   const setStep = useStore((s) => s.setStep);
 
   // Closing the export dialog returns the user to the synchronized preview.
@@ -31,6 +34,12 @@ export function ExportDialog({ project }: { project: Project }) {
   const readiness = exportReadiness(project);
   const fileName = exportFileName(project, ex.format);
   const paramsHash = project.generated?.paramsHash;
+  const inferredDims = inferredFabricationDims(project);
+  const genWarnings = project.generated?.warnings ?? [];
+  // Export honesty policy (reviewer #5C): inferred fabrication dimensions ARE exported, so the
+  // user must explicitly acknowledge them first. Measured-only models need no acknowledgement.
+  const needsAck = inferredDims.length > 0;
+  const canExport = readiness.ready && (!needsAck || ex.acknowledgedInferred);
 
   // ----- progress -----
   if (ex.phase === "progress") {
@@ -179,7 +188,7 @@ export function ExportDialog({ project }: { project: Project }) {
             Cancel
           </Button>
           <Spacer />
-          <Button size="sm" variant="primary" icon="export" disabled={!ready} onClick={runExport}>
+          <Button size="sm" variant="primary" icon="export" disabled={!canExport} onClick={runExport}>
             Export {ex.format.toUpperCase()}
           </Button>
         </>
@@ -210,7 +219,52 @@ export function ExportDialog({ project }: { project: Project }) {
             </div>
           </div>
         </div>
-      ) : (
+      ) : null}
+
+      {ready && genWarnings.length > 0 ? (
+        <div style={{ marginTop: 12 }}>
+          <div className="insp-title" style={{ marginBottom: 6 }}>
+            Generation warnings ({genWarnings.length})
+          </div>
+          {genWarnings.map((w, i) => (
+            <div key={i} style={{ fontSize: 11, color: "var(--warn)", display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 4 }}>
+              <Icon name="triangle" style={{ width: 12, height: 12, marginTop: 1 }} />
+              <span>{w}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {ready && needsAck ? (
+        <div style={{ marginTop: 12, border: "1px solid var(--warn)", borderRadius: 8, padding: "10px 12px", background: "var(--warn-bg, #2a220c)" }}>
+          <div className="insp-title" style={{ marginBottom: 6 }}>
+            Inferred fabrication dimensions ({inferredDims.length})
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 6 }}>
+            These values were <b>inferred</b> as sensible defaults, not measured or confirmed. They will be exported. (No
+            dimension is <b>Unknown</b> — those block export entirely.)
+          </div>
+          <div style={{ fontSize: 11.5, lineHeight: 1.9 }}>
+            {inferredDims.map((d) => (
+              <div key={d.label}>
+                <span className="mono" style={{ color: "var(--warn)" }}>
+                  inferred
+                </span>{" "}
+                {d.label}: <b>{fmtLen(d.valueMm, project.units)}</b> {unitLabel(project.units)}
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Checkbox
+              checked={ex.acknowledgedInferred}
+              onChange={toggleAckInferred}
+              label={<>I understand these fabrication dimensions are inferred defaults, and choose to export them.</>}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {!ready ? (
         <div>
           <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 9 }}>
             Export writes only trustworthy geometry. Resolve these first:
@@ -229,9 +283,11 @@ export function ExportDialog({ project }: { project: Project }) {
               }
             />
           ))}
-          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>Nothing is exported with guessed values.</div>
+          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>
+            Unknown dimensions block export. Inferred defaults are exported only after you acknowledge them.
+          </div>
         </div>
-      )}
+      ) : null}
 
       <div className="hr" />
       <div className="insp-title" style={{ marginBottom: 8 }}>
