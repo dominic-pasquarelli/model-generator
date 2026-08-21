@@ -152,6 +152,73 @@ describe("import boundary rejects malformed .mgproj data (untrusted input)", () 
   });
 });
 
+describe("numeric + structural import invariants (reviewer #4)", () => {
+  /** A fully-valid generated record, so a corruption isolates the field under test. */
+  function validGenerated() {
+    return {
+      sourceVersion: 1,
+      key: "k",
+      paramsHash: "h",
+      dims: { widthMm: 85, depthMm: 56, heightMm: 9, standoffCount: 4, bodies: 1, triangles: 100 },
+      warnings: [],
+      createdAt: 0,
+      durationMs: null,
+    };
+  }
+
+  const MAX_SAFE = Number.MAX_SAFE_INTEGER; // 2^53 - 1
+  const UNSAFE = MAX_SAFE + 1; // 2^53 — `v + 1` no longer advances
+
+  const cases: Array<[string, (p: Record<string, any>, file: Record<string, any>) => void, RegExp]> = [
+    // ---- safe-integer versions/counts ----
+    ["a project version at the unsafe-integer ceiling (2^53)", (p) => (p.version = UNSAFE), /version/],
+    ["a fractional project version", (p) => (p.version = 1.5), /version/],
+    ["an unsafe generated sourceVersion", (p) => (p.generated = { ...validGenerated(), sourceVersion: UNSAFE }), /generated/],
+    ["a negative generated standoffCount", (p) => (p.generated = { ...validGenerated(), dims: { ...validGenerated().dims, standoffCount: -1 } }), /standoffCount/],
+    ["a fractional generated bodies count", (p) => (p.generated = { ...validGenerated(), dims: { ...validGenerated().dims, bodies: 1.5 } }), /bodies/],
+    ["an unsafe export sizeBytes", (p) => (p.exports = [{ id: "e", fileName: "f", paramsHash: "h", generationKey: "g", format: "stl", sizeBytes: UNSAFE, createdAt: 0, wroteSidecar: false }]), /sizeBytes|numbers/],
+    // ---- timestamp range ----
+    ["a negative generated createdAt", (p) => (p.generated = { ...validGenerated(), createdAt: -1 }), /createdAt/],
+    ["an absurd far-future generated createdAt", (p) => (p.generated = { ...validGenerated(), createdAt: 32_503_680_000_001 }), /createdAt/],
+    ["a negative project updatedAt", (p) => (p.updatedAt = -5), /updatedAt/],
+    ["an out-of-range project createdAt", (p) => (p.createdAt = 9e18), /createdAt/],
+    ["a negative reference.addedAt", (p) => (p.reference.addedAt = -1), /addedAt/],
+    ["a bad calibration.createdAt", (p) => (p.calibration.createdAt = -1), /calibration\.createdAt/],
+    // ---- structural: board.id / reference.missing / calibration.reject* ----
+    ["a missing board.id", (p) => delete p.board.id, /board\.id/],
+    ["a non-string board.id", (p) => (p.board.id = 42), /board\.id/],
+    ["a non-boolean reference.missing", (p) => (p.reference.missing = "yes"), /reference\.missing/],
+    ["a non-string calibration.rejectReason", (p) => (p.calibration.rejectReason = 7), /rejectReason/],
+    // ---- oversized collections ----
+    ["oversized generated warnings", (p) => (p.generated = { ...validGenerated(), warnings: Array.from({ length: 501 }, () => "w") }), /warnings/],
+    // ---- extraneous keep-out payload (shape preserved) ----
+    ["a rect keep-out carrying a stale circlePx", (p) => (p.board.keepOuts[0].circlePx = { center: { x: 1, y: 1 }, radiusPx: 5 }), /circlePx|extraneous/],
+  ];
+
+  for (const [label, mutate, pattern] of cases) {
+    it(`rejects ${label}`, () => {
+      expect(() => parseProjectFile(corruptFile(mutate))).toThrow(MgFileError);
+      expect(() => parseProjectFile(corruptFile(mutate))).toThrow(pattern);
+    });
+  }
+
+  it("rejects a string-valued top-level schemaVersion even when the project marker is valid", () => {
+    const file = JSON.stringify({ schemaVersion: "1", project: JSON.parse(serializeProject(createSampleProject(1))) });
+    expect(() => parseProjectFile(file)).toThrow(MgFileError);
+    expect(() => parseProjectFile(file)).toThrow(/SCHEMA_MISMATCH|number/);
+  });
+
+  it("accepts a project version just below the safe-integer ceiling", () => {
+    const ok = corruptFile((p) => (p.version = MAX_SAFE - 1));
+    expect(() => parseProjectFile(ok)).not.toThrow();
+  });
+
+  it("accepts a valid generated record with in-range integer counts and timestamp", () => {
+    const ok = corruptFile((p) => (p.generated = validGenerated()));
+    expect(() => parseProjectFile(ok)).not.toThrow();
+  });
+});
+
 describe("v0 migration opens end-to-end through parseProjectFile (reviewer #5)", () => {
   it("a realistic pre-mount-strategy v0 file opens with a default mount and passes shape validation", () => {
     const v0 = JSON.stringify({

@@ -246,12 +246,25 @@ let exportTimer: ReturnType<typeof setTimeout> | null = null;
 // Monotonic token so a newer generation supersedes an older in-flight one.
 let generationSeq = 0;
 
-// Strictly-increasing edit timestamp so the revision chronology is always ordered,
-// even for rapid successive transitions (Date.now() can repeat within a millisecond).
+// Strictly-increasing edit timestamp so the revision chronology is always ordered, even for
+// rapid successive transitions (Date.now() can repeat within a millisecond). Anchored on the
+// current project's `updatedAt` too (reviewer #4): after importing a future-dated project, the
+// next edit's timestamp can never precede the imported value.
 let lastStamp = 0;
-function editStamp(): number {
-  lastStamp = Math.max(Date.now(), lastStamp + 1);
+function editStamp(anchor = 0): number {
+  lastStamp = Math.max(Date.now(), lastStamp + 1, anchor + 1);
   return lastStamp;
+}
+/**
+ * Advance the monotonic version counter with an explicit overflow guard (reviewer #4). Beyond
+ * Number.MAX_SAFE_INTEGER `v + 1 === v`, which would stall the counter and let two distinct
+ * states share an export filename. Import validation rejects unsafe versions, so this can only
+ * fire on a genuinely corrupt in-memory state — fail loudly rather than silently duplicate.
+ */
+function bumpVersion(v: number): number {
+  const n = v + 1;
+  if (!Number.isSafeInteger(n) || n <= v) throw new Error("Project version overflow — cannot advance the monotonic version counter.");
+  return n;
 }
 
 /**
@@ -271,7 +284,7 @@ function semanticSnapshot(project: Project): Project {
  * freshness is recomputed from the restored model's key, never trusted from a stored flag.
  */
 function restoreSemantic(snap: Project, current: Project): Project {
-  return { ...(structuredClone(snap) as Project), exports: structuredClone(current.exports), version: current.version + 1, updatedAt: editStamp() };
+  return { ...(structuredClone(snap) as Project), exports: structuredClone(current.exports), version: bumpVersion(current.version), updatedAt: editStamp(current.updatedAt) };
 }
 function stopExportTimer() {
   if (exportTimer) {
@@ -477,8 +490,8 @@ export const useStore = create<AppState>((set, get) => {
     const snapshot = semanticSnapshot(current);
     const next = structuredClone(current) as Project;
     mutator(next);
-    next.version += 1;
-    next.updatedAt = editStamp();
+    next.version = bumpVersion(current.version);
+    next.updatedAt = editStamp(current.updatedAt);
     const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
     // Record the pre-edit SEMANTIC snapshot for undo; a fresh edit clears the redo stack.
     const pastNext = [...get().past, snapshot].slice(-HISTORY_LIMIT);

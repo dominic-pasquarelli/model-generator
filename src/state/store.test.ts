@@ -359,3 +359,46 @@ describe("undo/redo preserve the append-only export ledger (reviewer #4)", () =>
     expect(past[past.length - 1].exports).toEqual([]);
   });
 });
+
+describe("import invariants at numeric extremes (reviewer #4)", () => {
+  /** Import a valid sample project after overriding one or more top-level fields. */
+  function importWith(mutateFile: (proj: Record<string, any>) => void) {
+    const file = JSON.parse(serializeProject(createSampleProject(1)));
+    mutateFile(file.project);
+    const res = useStore.getState().importProjectFile(JSON.stringify(file));
+    expect(res.ok, res.ok ? "" : res.error).toBe(true);
+  }
+
+  it("an edit after importing a future-dated project never moves the timestamp backward", () => {
+    const FUTURE = 2_500_000_000_000; // ~2049: after real Date.now(), within the year-3000 cap
+    importWith((proj) => (proj.updatedAt = FUTURE));
+    expect(useStore.getState().current!.updatedAt).toBe(FUTURE);
+    useStore.getState().setThicknessMm(2.5);
+    // The edit stamp is anchored on the imported updatedAt, so it moves forward, not back to now.
+    expect(useStore.getState().current!.updatedAt).toBeGreaterThan(FUTURE);
+  });
+
+  it("edit → undo → redo stays monotonic and unique when imported near the safe-integer ceiling", () => {
+    importWith((proj) => (proj.version = Number.MAX_SAFE_INTEGER - 10));
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    const seen = [useStore.getState().current!.version];
+    const record = () => seen.push(useStore.getState().current!.version);
+    useStore.getState().setThicknessMm(2);
+    record();
+    useStore.getState().setThicknessMm(3);
+    record();
+    useStore.getState().undo();
+    record();
+    useStore.getState().redo();
+    record();
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThan(seen[i - 1]);
+    expect(new Set(seen).size, "no two states share a version → never a duplicate export filename").toBe(seen.length);
+    expect(seen.every(Number.isSafeInteger)).toBe(true);
+  });
+
+  it("the version counter fails loudly at the ceiling rather than silently duplicating", () => {
+    importWith((proj) => (proj.version = Number.MAX_SAFE_INTEGER)); // safe int → passes import
+    // The next bump would be 2^53, where `v + 1` no longer advances: throw, never duplicate.
+    expect(() => useStore.getState().setThicknessMm(2)).toThrow(/overflow/i);
+  });
+});

@@ -23,6 +23,10 @@ const MAX_EXPORTS = 5_000;
 const MAX_RING_VERTICES = 5_000;
 const MAX_STRING = 8_192;
 const MAX_REF_SRC_BYTES = 12_000_000;
+/** Cap on the count of imported generated warnings (each also length-bounded by MAX_STRING). */
+const MAX_WARNINGS = 500;
+/** Upper bound for any imported timestamp (ms): 3000-01-01. Rejects absurd/far-future dates. */
+const MAX_TIMESTAMP = 32_503_680_000_000;
 /** Relative tolerance when re-deriving the calibration scale from the anchors on import. */
 const PX_PER_MM_REL_TOL = 1e-3;
 
@@ -191,6 +195,11 @@ export function parseProjectFile(text: string): ProjectFile {
   const rawObj = raw as Record<string, unknown>;
   const rawTopV = rawObj.schemaVersion;
   const rawProjV = (rawObj.project as Record<string, unknown> | undefined)?.schemaVersion;
+  // A PRESENT top-level marker must be a number: a string-valued marker (e.g. "2") paired
+  // with a valid project marker must be rejected, not silently ignored (reviewer #4).
+  if ("schemaVersion" in rawObj && typeof rawTopV !== "number") {
+    throw new MgFileError("SCHEMA_MISMATCH", "Top-level `schemaVersion` marker is present but not a number.");
+  }
   if (typeof rawTopV === "number" && typeof rawProjV === "number" && rawTopV !== rawProjV) {
     throw new MgFileError("SCHEMA_MISMATCH", `Top-level schema v${rawTopV} does not match project schema v${rawProjV}.`);
   }
@@ -234,13 +243,25 @@ function isRect(v: unknown): boolean {
 function isBoundedStr(v: unknown): v is string {
   return isStr(v) && v.length <= MAX_STRING;
 }
-/** A non-negative finite number (sizes, counts, timestamps). */
+/** A non-negative finite number (real-valued sizes/dimensions). */
 function isNonNeg(v: unknown): v is number {
   return isNum(v) && v >= 0;
 }
-/** A positive integer (versions). */
+/**
+ * A positive SAFE integer (versions). Number.isSafeInteger rejects >= 2^53, where `v + 1`
+ * no longer advances — an imported such version would stall the monotonic version counter
+ * and defeat unique export filenames (reviewer #4).
+ */
 function isPosInt(v: unknown): v is number {
-  return isNum(v) && Number.isInteger(v) && v > 0;
+  return isNum(v) && Number.isSafeInteger(v) && v > 0;
+}
+/** A non-negative safe integer (counts, byte sizes). */
+function isSafeCount(v: unknown): v is number {
+  return isNum(v) && Number.isSafeInteger(v) && v >= 0;
+}
+/** A timestamp (ms) within a sane epoch..year-3000 range, not merely any finite number. */
+function isTimestamp(v: unknown): v is number {
+  return isNum(v) && v >= 0 && v <= MAX_TIMESTAMP;
 }
 /** A simple, bounded, non-zero-area ring of 3..MAX_RING_VERTICES points. */
 function isValidRing(v: unknown, path: string): void {
@@ -330,31 +351,38 @@ function validateKeepOut(k: unknown, path: string): void {
   req(isEnum(ko.boardSide, BOARD_SIDES), `${path}.boardSide`);
   req(isValNum(ko.clearanceHeightMm), `${path}.clearanceHeightMm`);
   req(isEnum(ko.state, SOURCES), `${path}.state`);
-  // The discriminator and the populated payload must agree, and each shape's dimensions
-  // must be positive/simple — a "rect" with only a circlePx, a zero-size rect, or a
-  // self-intersecting polygon would otherwise reach the generator.
+  // The discriminator and the populated payload must agree, each shape's dimensions must be
+  // positive/simple, AND the other two payloads must be ABSENT — a "rect" carrying a stale
+  // circlePx/polygonPx (a real risk on the untrusted import path) must be rejected, not
+  // silently accepted, or the "discriminator/payload agreement" claim is a lie (reviewer #4).
+  const absent = (field: string) => req(ko[field] === undefined, `${path}.${field} (extraneous payload for a ${ko.shape} keep-out)`);
   if (ko.shape === "rect") {
     req(isRect(ko.rectPx), `${path}.rectPx`);
     const r = ko.rectPx as Record<string, unknown>;
     req((r.w as number) > 0 && (r.h as number) > 0, `${path}.rectPx (non-positive size)`);
+    absent("circlePx");
+    absent("polygonPx");
   } else if (ko.shape === "circle") {
     const c = ko.circlePx as Record<string, unknown> | undefined;
     req(isObj(c) && isPointB(c!.center) && inBounds(c!.radiusPx) && (c!.radiusPx as number) > 0, `${path}.circlePx`);
+    absent("rectPx");
+    absent("polygonPx");
   } else {
     isValidRing(ko.polygonPx, `${path}.polygonPx`);
+    absent("rectPx");
+    absent("circlePx");
   }
 }
 
 function validateGenerated(g: Record<string, unknown>): void {
-  req(isNum(g.sourceVersion) && isStr(g.key) && isStr(g.paramsHash), "generated.header");
+  req(isPosInt(g.sourceVersion) && isBoundedStr(g.key) && isBoundedStr(g.paramsHash), "generated.header");
   req(isObj(g.dims), "generated.dims");
   const d = g.dims as Record<string, unknown>;
-  for (const f of ["widthMm", "depthMm", "heightMm", "standoffCount", "bodies", "triangles"]) {
-    req(isNum(d[f]), `generated.dims.${f}`);
-  }
-  req(Array.isArray(g.warnings) && (g.warnings as unknown[]).every(isStr), "generated.warnings");
-  req(isNum(g.createdAt), "generated.createdAt");
-  req(g.durationMs === null || isNum(g.durationMs), "generated.durationMs");
+  for (const f of ["widthMm", "depthMm", "heightMm"]) req(isNonNeg(d[f]), `generated.dims.${f}`);
+  for (const f of ["standoffCount", "bodies", "triangles"]) req(isSafeCount(d[f]), `generated.dims.${f}`);
+  req(Array.isArray(g.warnings) && (g.warnings as unknown[]).length <= MAX_WARNINGS && (g.warnings as unknown[]).every(isBoundedStr), "generated.warnings (count/length)");
+  req(isTimestamp(g.createdAt), "generated.createdAt");
+  req(g.durationMs === null || isNonNeg(g.durationMs), "generated.durationMs");
 }
 
 function validateExportRecord(e: unknown, path: string): void {
@@ -362,7 +390,7 @@ function validateExportRecord(e: unknown, path: string): void {
   const r = e as Record<string, unknown>;
   req(isBoundedStr(r.id) && isBoundedStr(r.fileName) && isBoundedStr(r.paramsHash) && isBoundedStr(r.generationKey), `${path}.strings`);
   req(isEnum(r.format, EXPORT_FORMATS), `${path}.format`);
-  req(isNonNeg(r.sizeBytes) && isNum(r.createdAt), `${path}.numbers (non-negative size, finite timestamp)`);
+  req(isSafeCount(r.sizeBytes) && isTimestamp(r.createdAt), `${path}.numbers (safe size, in-range timestamp)`);
   req(isBool(r.wroteSidecar), `${path}.wroteSidecar`);
 }
 
@@ -372,12 +400,13 @@ export function validateProjectShape(project: Record<string, unknown>): void {
   req(isPosInt(project.version), "version (positive integer)");
   req(project.schemaVersion === SCHEMA_VERSION, "schemaVersion");
   req(isEnum(project.units, UNITS), "units");
-  req(isNum(project.createdAt) && isNum(project.updatedAt), "createdAt/updatedAt (finite)");
+  req(isTimestamp(project.createdAt) && isTimestamp(project.updatedAt), "createdAt/updatedAt (in-range timestamp)");
   req(isBoundedStr(project.generatorVersion), "generatorVersion");
 
   const board = project.board;
   req(isObj(board), "board");
   const b = board as Record<string, unknown>;
+  req(isBoundedStr(b.id), "board.id");
   req(isBoundedStr(b.name) && isBoundedStr(b.revision), "board.name/revision");
   req(isValNum(b.thicknessMm), "board.thicknessMm");
   req(Array.isArray(b.holes) && (b.holes as unknown[]).length <= MAX_HOLES, "board.holes (count)");
@@ -414,6 +443,8 @@ export function validateProjectShape(project: Record<string, unknown>): void {
     req(isSafeReferenceSrc(r.src), "reference.src (must be a raster data URL or an app-relative asset path — remote schemes are rejected)");
     req(inBounds(r.widthPx) && (r.widthPx as number) > 0 && inBounds(r.heightPx) && (r.heightPx as number) > 0, "reference.dimensions");
     req(isNum(r.rotationDeg), "reference.rotationDeg");
+    req(isTimestamp(r.addedAt), "reference.addedAt");
+    req(r.missing === undefined || isBool(r.missing), "reference.missing");
     req(isObj(r.capture) && isBoundedStr((r.capture as Record<string, unknown>).label) && isEnum((r.capture as Record<string, unknown>).kind, CAPTURE_KINDS), "reference.capture");
   }
   if (project.calibration !== null && project.calibration !== undefined) {
@@ -424,6 +455,9 @@ export function validateProjectShape(project: Record<string, unknown>): void {
     req(isValNum(c.knownMm), "calibration.knownMm");
     req(isEnum(c.source, CAL_SOURCES), "calibration.source");
     req(isEnum(c.status, CAL_STATUS), "calibration.status");
+    req(isTimestamp(c.createdAt), "calibration.createdAt");
+    req(c.rejectReason === undefined || isBoundedStr(c.rejectReason), "calibration.rejectReason");
+    req(c.rejectMessage === undefined || isBoundedStr(c.rejectMessage), "calibration.rejectMessage");
     req(c.pxPerMm === null || isNum(c.pxPerMm), "calibration.pxPerMm");
     if (c.status === "valid") {
       req(isNum(c.pxPerMm) && (c.pxPerMm as number) > 0, "calibration.pxPerMm (valid requires a positive scale)");
