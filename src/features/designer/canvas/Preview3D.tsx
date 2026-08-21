@@ -51,7 +51,7 @@ export function Preview3D({ project }: { project: Project }) {
             <b>Bracket</b>·{fmtLen(preview.dims.widthMm, project.units)} × {fmtLen(preview.dims.depthMm, project.units)} × {fmtLen(preview.dims.heightMm, project.units)} {unitLabel(project.units)}
           </div>
           <div className="cv-pill" style={{ right: 14, top: 152 }}>
-            {preview.dims.standoffCount} standoffs · {project.mount.fastener} · {preview.dims.bodies} {preview.dims.bodies === 1 ? "body" : "bodies"} · {preview.dims.triangles.toLocaleString()} △
+            {preview.dims.standoffCount} standoffs · {preview.dims.bodies} {preview.dims.bodies === 1 ? "body" : "bodies"} · {preview.dims.triangles.toLocaleString()} △
           </div>
           {liveWarning ? (
             <div className="cv-pill" style={{ left: 16, bottom: 92, background: "#332809cc", borderColor: "#8f6d24", color: "#f5d78e" }}>

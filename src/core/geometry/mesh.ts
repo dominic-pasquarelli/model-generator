@@ -24,9 +24,10 @@
  */
 import type { Point } from "@/core/geom";
 import { boardFrame, outlineDims, pxPointToBoardMm } from "@/core/project/derive";
-import type { GeneratedDimensions, KeepOut, Project } from "@/core/project/types";
+import type { FastenerChoice, FastenerStyle, GeneratedDimensions, KeepOut, Project } from "@/core/project/types";
 import { isKnown, maybe } from "@/core/project/value";
 import type { GeometryError } from "./adapter";
+import { fastenerProfile } from "./fasteners";
 import {
   ccw,
   circleRing,
@@ -120,16 +121,26 @@ export interface StandoffReport {
   id: string;
   label: string;
   centerMm: Point;
-  requestedDiameterMm: EffectiveValue | null;
-  bossDiameterMm: number;
+  /** The fastener + install style that drove this standoff's bore (per-hole; reviewer #3). */
+  fastener: FastenerChoice;
+  fastenerStyle: FastenerStyle;
+  /** Requested bore override (mm, pre-tolerance) when the user set one; null when the bore
+   *  came from the fastener profile. */
+  requestedBoreDiameterMm: number | null;
+  /** Where the base bore came from: a measured/confirmed override, or the inferred profile. */
+  boreSource: EffectiveValue["source"];
+  /** Effective standoff bore (mm), including fit clearance + tolerance offset. */
   boreDiameterMm: number;
+  bossDiameterMm: number;
+  /** Heat-set only: recommended insert seat depth (mm) the standoff must accommodate; else null. */
+  insertDepthMm: number | null;
   through: boolean;
 }
 
 /** The complete effective geometry recipe reported to the sidecar (reviewer #3/#4). */
 export interface EffectiveParams {
   strategy: Project["mount"]["kind"];
-  fastenerStyle: Project["mount"]["fastenerStyle"];
+  /** Fastener install style is now per-standoff (see `standoffs`); a board may mix hardware. */
   tolerance: Project["mount"]["tolerance"];
   baseThicknessMm: EffectiveValue;
   standoffHeightMm: EffectiveValue;
@@ -459,12 +470,6 @@ function makeTab(ring: Pt[], edgeIndex: number, width: number, depth: number, bo
   return { ok: true, ring: newRing, boreCenter };
 }
 
-function boreDiameter(holeDiameter: number, clearance: number, tolOffset: number, style: Project["mount"]["fastenerStyle"]): number {
-  const clearBore = holeDiameter + clearance + 2 * tolOffset; // through / insert seat
-  if (style === "self-tapping") return holeDiameter * 0.8 + 2 * tolOffset; // pilot for the thread to bite
-  return clearBore;
-}
-
 function fail(code: string, message: string, feature?: string): { ok: false; error: GeometryError } {
   return { ok: false, error: feature ? { code, message, feature } : { code, message } };
 }
@@ -570,25 +575,65 @@ export function buildBracketMesh(project: Project): MeshResult {
   const bossR = boss / 2;
   const warnings: string[] = [];
 
-  // Per-hole bores, validated against the boss wall — never silently resized.
+  // Per-hole standoff bores from the fastener PROFILE (reviewer #3): the bore is the fastener's
+  // recommended standoff hole for its install style — a through-bolt clearance, a thread-forming
+  // self-tapping pilot, or a heat-set insert bore — never the board hole diameter and never an
+  // unnamed factor. A per-hole measured override wins; a `custom` fastener with no override
+  // blocks. Fit clearance + tolerance offset are the print adjustments on top of the base bore.
   const standoffs: StandoffReport[] = [];
   const seats: Pt[] = [];
   for (const h of project.board.holes) {
     const d = maybe(h.diameterMm);
-    if (d == null) return fail("MISSING_DIAMETER", `${h.label} has no diameter; its standoff and screw hole cannot be sized.`, h.label);
-    if (!(d > 0)) return fail("INVALID_DIAMETER", `${h.label} has a non-positive diameter.`, h.label);
-    const through = m.fastenerStyle === "through-bolt";
-    const boreD = boreDiameter(d, clearance, tolOffset, m.fastenerStyle);
+    if (d == null) return fail("MISSING_DIAMETER", `${h.label} has no board hole diameter; set it before generating.`, h.label);
+    if (!(d > 0)) return fail("INVALID_DIAMETER", `${h.label} has a non-positive board hole diameter.`, h.label);
+
+    const style = h.fastenerStyle;
+    const through = style === "through-bolt";
+    const profile = fastenerProfile(h.fastener, style);
+    const overrideVal = h.boreDiameterMm;
+    const override = overrideVal ? maybe(overrideVal) : null;
+    let baseBore: number;
+    let boreSource: EffectiveValue["source"];
+    let requestedBoreDiameterMm: number | null;
+    let insertDepthMm: number | null;
+    if (override != null) {
+      if (!(override > 0)) return fail("INVALID_BORE", `${h.label} has a non-positive bore override.`, h.label);
+      baseBore = override;
+      boreSource = overrideVal && isKnown(overrideVal) ? overrideVal.source : "measured";
+      requestedBoreDiameterMm = override;
+      insertDepthMm = profile?.insertDepthMm ?? null;
+    } else if (profile) {
+      baseBore = profile.boreDiameterMm;
+      boreSource = "inferred";
+      requestedBoreDiameterMm = null;
+      insertDepthMm = profile.insertDepthMm;
+    } else {
+      return fail("MISSING_FASTENER_SPEC", `${h.label} uses a custom fastener with no bore set; enter its standoff bore diameter or choose a standard fastener size.`, h.label);
+    }
+    const boreD = baseBore + clearance + 2 * tolOffset;
     const boreR = boreD / 2;
     if (boreR < MIN_BORE_RADIUS_MM) return fail("BORE_TOO_SMALL", `${h.label} bore ⌀${boreD.toFixed(3)} mm is too small to generate.`, h.label);
     if (bossR - boreR < MIN_BOSS_WALL_MM)
       return fail(
         "BORE_ESCAPES_STANDOFF",
-        `${h.label}: a ⌀${boreD.toFixed(2)} mm bore leaves under ${MIN_BOSS_WALL_MM} mm wall inside a ⌀${boss.toFixed(2)} mm boss. Increase the boss or reduce the hole/clearance.`,
+        `${h.label}: a ⌀${boreD.toFixed(2)} mm bore leaves under ${MIN_BOSS_WALL_MM} mm wall inside a ⌀${boss.toFixed(2)} mm boss. Increase the boss or reduce the bore/clearance.`,
         h.label,
       );
+    // A heat-set insert must seat within the (blind) standoff bore depth.
+    if (insertDepthMm != null && !through && standoffH < insertDepthMm)
+      return fail(
+        "INSERT_TOO_DEEP",
+        `${h.label}: a ${h.fastener} heat-set insert needs a ${round2(insertDepthMm)} mm seat, deeper than the ${round2(standoffH)} mm standoff bore. Increase the standoff height or change the fastener style.`,
+        h.label,
+      );
+    // Non-blocking consistency / recommendation notes.
+    if (through && d < boreD - CONTACT_EPS)
+      warnings.push(`${h.label}: the ${round2(d)} mm board hole is narrower than the ${round2(boreD)} mm through-bolt bore — the screw may not pass the board.`);
+    if (profile && boss < profile.minBossDiameterMm - CONTACT_EPS)
+      warnings.push(`${h.label}: boss ⌀${round2(boss)} mm is below the ${round2(profile.minBossDiameterMm)} mm recommended for a ${h.fastener} ${style}; the standoff wall may be thin.`);
+
     const c = pxPointToBoardMm(h.centerPx, frame);
-    standoffs.push({ id: h.id, label: h.label, centerMm: c, requestedDiameterMm: valOrNull(h.diameterMm, d), bossDiameterMm: boss, boreDiameterMm: boreD, through });
+    standoffs.push({ id: h.id, label: h.label, centerMm: c, fastener: h.fastener, fastenerStyle: style, requestedBoreDiameterMm, boreSource, boreDiameterMm: boreD, bossDiameterMm: boss, insertDepthMm, through });
     seats.push(c);
   }
 
@@ -789,7 +834,6 @@ export function buildBracketMesh(project: Project): MeshResult {
 
   const effective: EffectiveParams = {
     strategy: m.kind,
-    fastenerStyle: m.fastenerStyle,
     tolerance: m.tolerance,
     baseThicknessMm: valOf(project.mount.baseThicknessMm, base),
     standoffHeightMm: valOf(project.mount.standoffHeightMm, standoffH),
@@ -1020,10 +1064,6 @@ function boundingBoxLocal(pts: Pt[]): { x0: number; y0: number; x1: number; y1: 
 function valOf(v: Project["mount"]["baseThicknessMm"], value: number): EffectiveValue {
   const source = isKnown(v) ? v.source : "inferred";
   return { value, source };
-}
-
-function valOrNull(v: Project["board"]["holes"][number]["diameterMm"], value: number): EffectiveValue | null {
-  return isKnown(v) ? { value, source: v.source } : { value, source: "inferred" };
 }
 
 function combine(bodies: BodyMesh[]): BracketMesh {

@@ -21,7 +21,7 @@ import { buildBracketMesh, MIN_BOSS_WALL_MM, type BracketMesh, type EffectivePar
 import { ACTIVE_ADAPTER_VERSION } from "@/core/geometry/adapter";
 import { generationKey } from "@/core/project/derive";
 import { GENERATOR_VERSION } from "@/core/project/types";
-import type { ExportFormat, ExportRecord, GeneratedDimensions, Project } from "@/core/project/types";
+import type { ExportFormat, ExportRecord, FastenerChoice, FastenerStyle, GeneratedDimensions, Project } from "@/core/project/types";
 import { isKnown, type Val } from "@/core/project/value";
 import { exportReadiness, type ExportReadiness } from "@/core/validation/validate";
 import { uid } from "@/lib/id";
@@ -46,7 +46,7 @@ export interface ParamDimReport {
  */
 export interface ExportParameters {
   strategy: EffectiveParams["strategy"];
-  fastenerStyle: EffectiveParams["fastenerStyle"];
+  /** Fastener install style is per-standoff (see `standoffs`); a board may mix hardware. */
   tolerance: EffectiveParams["tolerance"];
   toleranceOffsetMm: number;
   cornerRadiusMm: number;
@@ -78,9 +78,17 @@ export interface ExportParameters {
     id: string;
     label: string;
     centerMm: { x: number; y: number };
-    requestedDiameterMm: ParamDimReport["requested"];
-    bossDiameterMm: number;
+    /** The fastener + install style + bore provenance that produced this standoff (reviewer #3). */
+    fastener: FastenerChoice;
+    fastenerStyle: FastenerStyle;
+    /** Requested bore override (mm, pre-tolerance) or null when the bore came from the profile. */
+    requestedBoreDiameterMm: number | null;
+    boreSource: "measured" | "confirmed" | "inferred";
+    /** Effective standoff bore (mm), incl. fit clearance + tolerance offset. */
     boreDiameterMm: number;
+    bossDiameterMm: number;
+    /** Heat-set only: recommended insert seat depth (mm); null otherwise. */
+    insertDepthMm: number | null;
     through: boolean;
   }[];
 }
@@ -179,7 +187,6 @@ function buildParameters(project: Project, effective: EffectiveParams): ExportPa
   const m = project.mount;
   return {
     strategy: effective.strategy,
-    fastenerStyle: effective.fastenerStyle,
     tolerance: effective.tolerance,
     toleranceOffsetMm: effective.toleranceOffsetMm,
     cornerRadiusMm: effective.cornerRadiusMm,
@@ -215,18 +222,19 @@ function buildParameters(project: Project, effective: EffectiveParams): ExportPa
     standoffHeightMm: paramDim(effective.standoffHeightMm, m.standoffHeightMm),
     bossDiameterMm: paramDim(effective.bossDiameterMm, m.bossDiameterMm),
     clearanceMm: paramDim(effective.clearanceMm, m.clearanceMm),
-    // The requested diameter is carried on the report itself, resolved by POSITION when the
-    // solid was built (reviewer #6) — never re-joined here by the mutable, collision-prone
-    // label. Key the entry by the stable hole id.
+    // Every standoff carries its own fastener + install style + bore provenance, keyed by the
+    // stable hole id (reviewer #3/#6) — requested-vs-effective bore is auditable per standoff.
     standoffs: effective.standoffs.map((s) => ({
       id: s.id,
       label: s.label,
       centerMm: { x: s.centerMm.x, y: s.centerMm.y },
-      requestedDiameterMm: s.requestedDiameterMm
-        ? { known: true, valueMm: s.requestedDiameterMm.value, source: s.requestedDiameterMm.source }
-        : { known: false },
-      bossDiameterMm: s.bossDiameterMm,
+      fastener: s.fastener,
+      fastenerStyle: s.fastenerStyle,
+      requestedBoreDiameterMm: s.requestedBoreDiameterMm,
+      boreSource: s.boreSource,
       boreDiameterMm: s.boreDiameterMm,
+      bossDiameterMm: s.bossDiameterMm,
+      insertDepthMm: s.insertDepthMm,
       through: s.through,
     })),
   };

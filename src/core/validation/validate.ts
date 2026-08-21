@@ -283,21 +283,24 @@ export function validateProject(project: Project): Validation[] {
   }
 
   // ---- Thickness ----
+  // Board thickness is a documented board MEASUREMENT (useful for screw length and assembly
+  // planning); the bracket sits under the board, so it does NOT enter the bracket geometry and
+  // never blocks generation (reviewer #3). It is recorded for provenance, not consumed as a cut.
   if (!isKnown(board.thicknessMm)) {
     out.push({
       id: "thickness-unknown",
       severity: "warning",
       title: "Board thickness not measured",
-      body: "Standoff seating and clearance depend on it. Enter the measured board thickness.",
+      body: "Recorded for assembly/screw-length planning; it does not affect the generated bracket. Enter it when known.",
       fix: { label: "Enter thickness", target: { step: "measurements", field: "thicknessMm" } },
       relatesTo: { step: "measurements" },
     });
   } else if (!(board.thicknessMm.value > 0)) {
     out.push({
       id: "thickness-nonpositive",
-      severity: "error",
+      severity: "warning",
       title: "Board thickness must be positive",
-      body: "A zero or negative board thickness is not physical.",
+      body: "A zero or negative board thickness is not physical. It does not block the bracket, but fix the measurement.",
       fix: { label: "Fix thickness", target: { step: "measurements", field: "thicknessMm" } },
       relatesTo: { step: "measurements" },
     });

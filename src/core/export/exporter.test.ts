@@ -75,9 +75,8 @@ describe("sidecar carries a full auditable parameter snapshot (reviewer #4)", ()
     expect(params).not.toBeNull();
     if (!params) return;
 
-    // Strategy / fastener / tolerance and the generator constants are all present.
+    // Strategy / tolerance and the generator constants are all present.
     expect(params.strategy).toBe(project.mount.kind);
-    expect(params.fastenerStyle).toBe(project.mount.fastenerStyle);
     expect(params.tolerance).toBe(project.mount.tolerance);
     expect(params.wallMm).toBeGreaterThan(0);
     expect(params.minBossWallMm).toBeGreaterThan(0);
@@ -88,11 +87,17 @@ describe("sidecar carries a full auditable parameter snapshot (reviewer #4)", ()
     expect(params.bossDiameterMm.requested).toEqual({ known: true, valueMm: 7, source: "inferred" });
     expect(params.bossDiameterMm.effectiveMm).toBe(7);
 
-    // Every hole yields one standoff with a positive bore in the table.
+    // Every hole yields one standoff carrying its per-hole fastener + install style + bore
+    // provenance (reviewer #3) — the sample's holes are M3 heat-set with an inferred profile bore.
     expect(params.standoffs).toHaveLength(project.board.holes.length);
     for (const s of params.standoffs) {
       expect(s.boreDiameterMm).toBeGreaterThan(0);
       expect(typeof s.through).toBe("boolean");
+      expect(s.fastener).toBe("M3");
+      expect(s.fastenerStyle).toBe("heat-set-insert");
+      expect(s.boreSource).toBe("inferred");
+      expect(s.requestedBoreDiameterMm).toBeNull();
+      expect(s.insertDepthMm).toBeGreaterThan(0); // heat-set carries a seat depth
       expect(Number.isFinite(s.centerMm.x) && Number.isFinite(s.centerMm.y)).toBe(true);
     }
 
@@ -213,28 +218,25 @@ describe("every semantic mount field is covered by the geometry contract (review
   };
   const baseline = build(() => {});
 
-  // A COMPLETE contract over every MountStrategy field — not a hand-picked subset. Every
-  // field must at least change the generation key (the identity the exporter and staleness
-  // logic depend on); `changesMesh` says whether it must also change the welded mesh. The
-  // completeness guard below fails if a field is added to MountStrategy without a classifier
-  // here, so this table cannot silently go stale.
-  const CONTRACT: Record<keyof MountStrategy, { changesMesh: boolean; mutate: (p: Project) => void }> = {
-    // For the sample's 4 seats the bridge footprint differs from the full-board plate.
-    kind: { changesMesh: true, mutate: (p) => (p.mount.kind = "standoff-bridge") },
-    standoffHeightMm: { changesMesh: true, mutate: (p) => (p.mount.standoffHeightMm = measured(9)) },
-    baseThicknessMm: { changesMesh: true, mutate: (p) => (p.mount.baseThicknessMm = measured(4)) },
-    // The fastener class is recorded in the generation identity but not cut into the solid
-    // (only fastenerStyle drives the bore), so it changes the key but never the mesh.
-    fastener: { changesMesh: false, mutate: (p) => (p.mount.fastener = "M4") },
-    fastenerStyle: { changesMesh: true, mutate: (p) => (p.mount.fastenerStyle = "through-bolt") },
-    bossDiameterMm: { changesMesh: true, mutate: (p) => (p.mount.bossDiameterMm = measured(8)) },
-    sideTabs: { changesMesh: true, mutate: (p) => (p.mount.sideTabs = 4) },
-    clearanceMm: { changesMesh: true, mutate: (p) => (p.mount.clearanceMm = measured(0.5)) },
-    tolerance: { changesMesh: true, mutate: (p) => (p.mount.tolerance = "sla-0.05") },
-    // Only consumed under the custom profile: selecting it with a value differs from the
-    // fdm-0.20 baseline in both the fit offset (mesh) and the recorded identity (key).
+  // A COMPLETE contract over every MountStrategy field — not a hand-picked subset. Each field
+  // is classified by effect: "mesh" changes the welded mesh AND the generation key; "key-only"
+  // changes the key but not the mesh; "seed" is a NEW-hole default that is deliberately excluded
+  // from the geometry key, so it changes neither (reviewer #3 — the cut authority is per-hole).
+  // The completeness guard fails if a field is added to MountStrategy without a classifier here.
+  type Effect = "mesh" | "key-only" | "seed";
+  const CONTRACT: Record<keyof MountStrategy, { effect: Effect; mutate: (p: Project) => void }> = {
+    kind: { effect: "mesh", mutate: (p) => (p.mount.kind = "standoff-bridge") },
+    standoffHeightMm: { effect: "mesh", mutate: (p) => (p.mount.standoffHeightMm = measured(9)) },
+    baseThicknessMm: { effect: "mesh", mutate: (p) => (p.mount.baseThicknessMm = measured(4)) },
+    // Seeds for new holes only — never in the geometry key, never cut into the solid.
+    defaultFastener: { effect: "seed", mutate: (p) => (p.mount.defaultFastener = "M4") },
+    defaultFastenerStyle: { effect: "seed", mutate: (p) => (p.mount.defaultFastenerStyle = "through-bolt") },
+    bossDiameterMm: { effect: "mesh", mutate: (p) => (p.mount.bossDiameterMm = measured(8)) },
+    sideTabs: { effect: "mesh", mutate: (p) => (p.mount.sideTabs = 4) },
+    clearanceMm: { effect: "mesh", mutate: (p) => (p.mount.clearanceMm = measured(0.5)) },
+    tolerance: { effect: "mesh", mutate: (p) => (p.mount.tolerance = "sla-0.05") },
     customToleranceMm: {
-      changesMesh: true,
+      effect: "mesh",
       mutate: (p) => {
         p.mount.tolerance = "custom";
         p.mount.customToleranceMm = 0.33;
@@ -247,12 +249,17 @@ describe("every semantic mount field is covered by the geometry contract (review
   });
 
   for (const field of Object.keys(CONTRACT) as (keyof MountStrategy)[]) {
-    const { changesMesh, mutate } = CONTRACT[field];
-    it(`${field}: mutation changes the generation key${changesMesh ? " and the mesh hash" : " but not the mesh"}`, () => {
+    const { effect, mutate } = CONTRACT[field];
+    it(`${field}: ${effect}`, () => {
       const got = build(mutate);
-      expect(got.key, "generation key must change").not.toBe(baseline.key);
-      if (changesMesh) expect(got.hash, "mesh hash must change").not.toBe(baseline.hash);
-      else expect(got.hash, "mesh hash must NOT change (recorded, not cut)").toBe(baseline.hash);
+      if (effect === "seed") {
+        expect(got.key, "seed default must NOT change the geometry key").toBe(baseline.key);
+        expect(got.hash, "seed default must NOT change the mesh").toBe(baseline.hash);
+      } else {
+        expect(got.key, "generation key must change").not.toBe(baseline.key);
+        if (effect === "mesh") expect(got.hash, "mesh hash must change").not.toBe(baseline.hash);
+        else expect(got.hash, "mesh hash must NOT change (recorded, not cut)").toBe(baseline.hash);
+      }
     });
   }
 });

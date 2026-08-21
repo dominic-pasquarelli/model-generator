@@ -85,12 +85,12 @@ function largeBoardProject(microBore = false): Project {
   const p = createSampleProject(1_000_000);
   p.calibration!.pxPerMm = 0.84; // 850 px / 0.84 ≈ 1012 mm wide
   if (microBore) {
-    p.mount.fastenerStyle = "self-tapping";
     p.mount.tolerance = "sla-0.05";
-    // A tiny pilot bore whose ~0.06 mm-radius ring, near x≈1003 mm, has sub-0.01 mm chords —
-    // exactly the sub-token-grid features that collapse under 6-significant-digit formatting.
+    p.mount.clearanceMm = measured(0);
+    // A tiny bore override (~0.06 mm radius) whose tessellated ring near x≈1003 mm has sub-0.01
+    // mm chords — exactly the sub-token-grid features that collapse under 6-sig-digit formatting.
     p.board.holes = [
-      { ...p.board.holes[0], centerPx: { x: 918, y: 300 }, diameterMm: measured(0.03) },
+      { ...p.board.holes[0], centerPx: { x: 918, y: 300 }, boreDiameterMm: measured(0.024) },
       { ...p.board.holes[1], centerPx: { x: 120, y: 300 } },
     ];
   }

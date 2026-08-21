@@ -15,6 +15,7 @@ import type {
   CalibrationSourceKind,
   ExportFormat,
   FastenerChoice,
+  FastenerStyle,
   KeepOut,
   KeepOutShape,
   MountingHole,
@@ -411,7 +412,7 @@ export interface AppState {
   addHoleAt: (centerImg: Point) => void;
   addHoleAtCenter: () => void;
   addKeepOutCenter: () => void;
-  updateHole: (id: string, patch: Partial<Pick<MountingHole, "fastener" | "state">> & { diameterMm?: number | null; center?: Point }) => void;
+  updateHole: (id: string, patch: Partial<Pick<MountingHole, "fastener" | "fastenerStyle" | "state">> & { diameterMm?: number | null; boreDiameterMm?: number | null; center?: Point }) => void;
   confirmHole: (id: string) => void;
   deleteHole: (id: string) => void;
   addKeepOutRect: (a: Point, b: Point) => void;
@@ -471,8 +472,9 @@ export interface MountPatch {
   baseThicknessMm: number | null;
   bossDiameterMm: number | null;
   clearanceMm: number | null;
-  fastener: FastenerChoice;
-  fastenerStyle: Project["mount"]["fastenerStyle"];
+  /** Fastener + install style seeded onto NEW holes (a default, not the cut authority). */
+  defaultFastener: FastenerChoice;
+  defaultFastenerStyle: FastenerStyle;
   sideTabs: 0 | 2 | 4;
   tolerance: Project["mount"]["tolerance"];
   /** Explicit custom fit offset (mm); consumed only when tolerance is "custom". */
@@ -777,7 +779,8 @@ export const useStore = create<AppState>((set, get) => {
           label,
           centerPx: centerImg,
           diameterMm: unknownVal<number>(),
-          fastener: "M3",
+          fastener: p.mount.defaultFastener,
+          fastenerStyle: p.mount.defaultFastenerStyle,
           positionSource: p.calibration?.status === "valid" ? "clicked-calibrated" : "typed",
           state: "measured",
         });
@@ -806,7 +809,14 @@ export const useStore = create<AppState>((set, get) => {
         const h = p.board.holes.find((x) => x.id === id);
         if (!h) return;
         if ("diameterMm" in patch) h.diameterMm = valFromInput(patch.diameterMm ?? null, h.diameterMm);
+        if ("boreDiameterMm" in patch) {
+          // Setting a value is a measured override; clearing it (null) reverts the bore to the
+          // fastener-profile default.
+          const v = patch.boreDiameterMm;
+          h.boreDiameterMm = v != null && Number.isFinite(v) && v > 0 ? typeMeasured(v) : undefined;
+        }
         if (patch.fastener) h.fastener = patch.fastener;
+        if (patch.fastenerStyle) h.fastenerStyle = patch.fastenerStyle;
         if (patch.state) h.state = patch.state;
         if (patch.center) {
           h.centerPx = patch.center;
@@ -869,8 +879,8 @@ export const useStore = create<AppState>((set, get) => {
       mutate((p) => {
         const m = p.mount;
         if (patch.kind) m.kind = patch.kind;
-        if (patch.fastener) m.fastener = patch.fastener;
-        if (patch.fastenerStyle) m.fastenerStyle = patch.fastenerStyle;
+        if (patch.defaultFastener) m.defaultFastener = patch.defaultFastener;
+        if (patch.defaultFastenerStyle) m.defaultFastenerStyle = patch.defaultFastenerStyle;
         if (patch.sideTabs !== undefined) m.sideTabs = patch.sideTabs;
         if (patch.tolerance) m.tolerance = patch.tolerance;
         if ("customToleranceMm" in patch) {

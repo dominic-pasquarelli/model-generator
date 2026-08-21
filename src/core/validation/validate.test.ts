@@ -28,6 +28,7 @@ function hole(id: string, label: string, x: number, y: number, dia: number | nul
     centerPx: { x, y },
     diameterMm: dia == null ? unknownVal<number>() : measured(dia),
     fastener: "M3",
+    fastenerStyle: "heat-set-insert",
     positionSource: "clicked-calibrated",
     state: "measured",
   };

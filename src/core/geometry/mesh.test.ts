@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { createSampleProject } from "@/core/project/fixtures";
-import { measured, unknownVal } from "@/core/project/value";
-import type { Project } from "@/core/project/types";
+import { measured, unknownVal, type Val } from "@/core/project/value";
+import type { FastenerChoice, FastenerStyle, Project } from "@/core/project/types";
 import { assembleSolid, auditMesh, buildBracketMesh, hashMesh, type BracketMesh } from "./mesh";
 
 /**
@@ -70,8 +70,8 @@ describe("buildBracketMesh — one connected watertight manifold", () => {
     ["two side tabs", (p) => (p.mount.sideTabs = 2)],
     ["four side tabs", (p) => (p.mount.sideTabs = 4)],
     ["no side tabs", (p) => (p.mount.sideTabs = 0)],
-    ["through-bolt fastener", (p) => (p.mount.fastenerStyle = "through-bolt")],
-    ["self-tapping fastener", (p) => (p.mount.fastenerStyle = "self-tapping")],
+    ["through-bolt fastener", (p) => p.board.holes.forEach((h) => (h.fastenerStyle = "through-bolt"))],
+    ["self-tapping fastener", (p) => p.board.holes.forEach((h) => (h.fastenerStyle = "self-tapping"))],
     ["corner radius", (p) => (p.board.outline!.cornerRadiusMm = measured(3))],
   ];
   for (const [label, mutate] of variants) {
@@ -146,10 +146,10 @@ describe("buildBracketMesh — one connected watertight manifold", () => {
     expect(r.warnings.some((w) => /inferred fabrication/i.test(w))).toBe(true);
   });
 
-  it("changing fastener style changes the bore (each option affects geometry)", () => {
+  it("changing a hole's fastener style changes the bore (each option affects geometry)", () => {
     const blind = build(createSampleProject(1_000_000)).effective.standoffs[0].boreDiameterMm;
     const pilot = createSampleProject(1_000_000);
-    pilot.mount.fastenerStyle = "self-tapping";
+    pilot.board.holes.forEach((h) => (h.fastenerStyle = "self-tapping"));
     expect(build(pilot).effective.standoffs[0].boreDiameterMm).not.toBeCloseTo(blind, 3);
   });
 
@@ -290,6 +290,73 @@ describe("buildBracketMesh — fail-closed hardening (reviewer #1/#2)", () => {
     const again = assembleSolid(r.recipe);
     expect(again.ok).toBe(true);
     if (again.ok) expect(hashMesh(again.mesh)).toBe(r.meshHash);
+  });
+});
+
+describe("fastener fabrication model (reviewer #3)", () => {
+  const buildWith = (fastener: FastenerChoice, style: FastenerStyle, bore?: Val<number>) => {
+    const p = createSampleProject(1_000_000);
+    p.board.holes.forEach((h) => {
+      h.fastener = fastener;
+      h.fastenerStyle = style;
+      if (bore) h.boreDiameterMm = bore;
+    });
+    return buildBracketMesh(p);
+  };
+  const boreOf = (fastener: FastenerChoice, style: FastenerStyle) => {
+    const r = buildWith(fastener, style);
+    if (!r.ok) throw new Error(`build failed: ${r.error.code}`);
+    return r.effective.standoffs[0].boreDiameterMm;
+  };
+
+  it("bore comes from the fastener profile and DIFFERS by install style (no shared formula)", () => {
+    const bores = (["through-bolt", "self-tapping", "heat-set-insert"] as FastenerStyle[]).map((s) => Math.round(boreOf("M3", s) * 100));
+    expect(new Set(bores).size, "three distinct M3 bores").toBe(3);
+  });
+
+  it("tags an inferred profile bore with provenance + fastener + heat-set seat depth", () => {
+    const r = buildWith("M3", "heat-set-insert");
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    const s = r.effective.standoffs[0];
+    expect(s.fastener).toBe("M3");
+    expect(s.fastenerStyle).toBe("heat-set-insert");
+    expect(s.boreSource).toBe("inferred");
+    expect(s.requestedBoreDiameterMm).toBeNull();
+    expect(s.insertDepthMm).toBeGreaterThan(0);
+  });
+
+  it("covers the full M2/M2.5/M3/M4 × 3-style matrix: builds with a positive bore or a coded blocker", () => {
+    for (const f of ["M2", "M2.5", "M3", "M4"] as FastenerChoice[]) {
+      for (const s of ["through-bolt", "self-tapping", "heat-set-insert"] as FastenerStyle[]) {
+        const r = buildWith(f, s);
+        if (r.ok) expect(r.effective.standoffs[0].boreDiameterMm, `${f} ${s}`).toBeGreaterThan(0);
+        else expect(r.error.code, `${f} ${s}`).toMatch(/BORE_ESCAPES_STANDOFF|INSERT_TOO_DEEP|BORE_TOO_SMALL|DIMENSIONS_OUT_OF_RANGE/);
+      }
+    }
+  });
+
+  it("a custom fastener with no bore override BLOCKS with MISSING_FASTENER_SPEC", () => {
+    const r = buildWith("custom", "through-bolt");
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("MISSING_FASTENER_SPEC");
+  });
+
+  it("a custom fastener with an explicit measured bore override builds and is tagged measured", () => {
+    const r = buildWith("custom", "through-bolt", measured(3.2));
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.effective.standoffs[0].boreSource).toBe("measured");
+    expect(r.effective.standoffs[0].requestedBoreDiameterMm).toBe(3.2);
+  });
+
+  it("a heat-set insert deeper than the standoff BLOCKS with INSERT_TOO_DEEP", () => {
+    const p = createSampleProject(1_000_000);
+    p.mount.standoffHeightMm = measured(2); // shorter than the M3 heat-set seat depth
+    p.board.holes.forEach((h) => ((h.fastener = "M3"), (h.fastenerStyle = "heat-set-insert")));
+    const r = buildBracketMesh(p);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("INSERT_TOO_DEEP");
   });
 });
 

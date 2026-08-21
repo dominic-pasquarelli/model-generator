@@ -78,8 +78,8 @@ export function defaultMount(): MountStrategy {
     kind: "plate-standoffs",
     standoffHeightMm: inferred(6),
     baseThicknessMm: inferred(3),
-    fastener: "M3",
-    fastenerStyle: "heat-set-insert",
+    defaultFastener: "M3",
+    defaultFastenerStyle: "heat-set-insert",
     bossDiameterMm: inferred(7),
     sideTabs: 2,
     clearanceMm: inferred(0.3),
@@ -167,6 +167,35 @@ export const MIGRATIONS: Migration[] = [
       project.board = board;
       project.schemaVersion = 1;
       return { ...raw, schemaVersion: 1, project };
+    },
+  },
+  {
+    from: 1,
+    to: 2,
+    migrate: (raw) => {
+      // v1→v2: fastener + install style move to PER-HOLE ownership (reviewer #3). The old
+      // mount-level fastener/fastenerStyle become new-hole DEFAULTS; each existing hole
+      // inherits the old mount style (or a sensible default) unless it already carries one.
+      const project = (raw.project ?? {}) as Record<string, unknown>;
+      const mount = (project.mount ?? {}) as Record<string, unknown>;
+      const dFastener = (mount.defaultFastener ?? mount.fastener ?? "M3") as string;
+      const dStyle = (mount.defaultFastenerStyle ?? mount.fastenerStyle ?? "heat-set-insert") as string;
+      mount.defaultFastener = dFastener;
+      mount.defaultFastenerStyle = dStyle;
+      delete mount.fastener;
+      delete mount.fastenerStyle;
+      project.mount = mount;
+      const board = (project.board ?? {}) as Record<string, unknown>;
+      if (Array.isArray(board.holes)) {
+        board.holes = (board.holes as Record<string, unknown>[]).map((h) => ({
+          ...h,
+          fastener: h.fastener ?? dFastener,
+          fastenerStyle: h.fastenerStyle ?? dStyle,
+        }));
+      }
+      project.board = board;
+      project.schemaVersion = 2;
+      return { ...raw, schemaVersion: 2, project };
     },
   },
 ];
@@ -372,6 +401,8 @@ function validateHole(h: unknown, path: string): void {
   req(isPointB(hole.centerPx), `${path}.centerPx`);
   req(isValNum(hole.diameterMm), `${path}.diameterMm`);
   req(isEnum(hole.fastener, FASTENERS), `${path}.fastener`);
+  req(isEnum(hole.fastenerStyle, FASTENER_STYLES), `${path}.fastenerStyle`);
+  req(hole.boreDiameterMm === undefined || isValNum(hole.boreDiameterMm), `${path}.boreDiameterMm`);
   req(isEnum(hole.positionSource, HOLE_POSITIONS), `${path}.positionSource`);
   req(isEnum(hole.state, SOURCES), `${path}.state`);
 }
@@ -494,8 +525,8 @@ export function validateProjectShape(project: Record<string, unknown>): void {
   req(isObj(mount), "mount");
   const m = mount as Record<string, unknown>;
   req(isEnum(m.kind, STRATEGIES), "mount.kind");
-  req(isEnum(m.fastener, FASTENERS), "mount.fastener");
-  req(isEnum(m.fastenerStyle, FASTENER_STYLES), "mount.fastenerStyle");
+  req(isEnum(m.defaultFastener, FASTENERS), "mount.defaultFastener");
+  req(isEnum(m.defaultFastenerStyle, FASTENER_STYLES), "mount.defaultFastenerStyle");
   req(isEnum(m.tolerance, TOLERANCES), "mount.tolerance");
   // Optional so files written before the field existed still open; when present it must be a
   // non-negative finite number. Its required-ness for a "custom" profile is a generation-time

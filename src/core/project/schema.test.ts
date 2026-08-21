@@ -39,14 +39,43 @@ describe("serialize / load round-trip", () => {
 });
 
 describe("migrations", () => {
-  it("upgrades a pre-versioned v0 file to v1 with a default mount", () => {
+  it("upgrades a pre-versioned v0 file all the way to the current schema with a default mount", () => {
     const v0 = {
       project: { id: "x", name: "old", board: { id: "b", holes: [], keepOuts: [] } },
     };
-    const migrated = migrateData(v0 as never) as { schemaVersion: number; project: Record<string, unknown> };
-    expect(migrated.schemaVersion).toBe(1);
+    const migrated = migrateData(v0 as never) as { schemaVersion: number; project: Record<string, any> };
+    expect(migrated.schemaVersion).toBe(SCHEMA_VERSION);
     expect(migrated.project.mount).toBeTruthy();
+    // v1→v2 moved fastener ownership to per-hole: the mount carries defaults, not cut authority.
+    expect(migrated.project.mount.defaultFastenerStyle).toBeTruthy();
     expect(migrated.project.version).toBe(1);
+  });
+
+  it("v1→v2 moves fastener ownership to per-hole and keeps mount defaults", () => {
+    // A realistic v1 project: mount-level fastener/style, a hole WITHOUT a per-hole style.
+    const v1 = {
+      schemaVersion: 1,
+      project: {
+        id: "p",
+        name: "old",
+        version: 3,
+        schemaVersion: 1,
+        units: "mm",
+        createdAt: 10,
+        updatedAt: 20,
+        generatorVersion: "v",
+        exports: [],
+        mount: { fastener: "M4", fastenerStyle: "through-bolt" },
+        board: { id: "b", name: "", revision: "", thicknessMm: { known: false }, outline: null, keepOuts: [], holes: [{ id: "h", label: "H1", centerPx: { x: 1, y: 1 }, diameterMm: { known: false }, fastener: "M4", positionSource: "typed", state: "measured" }] },
+      },
+    };
+    const migrated = migrateData(v1 as never) as { schemaVersion: number; project: any };
+    expect(migrated.schemaVersion).toBe(2);
+    expect(migrated.project.mount.defaultFastener).toBe("M4");
+    expect(migrated.project.mount.defaultFastenerStyle).toBe("through-bolt");
+    expect(migrated.project.mount.fastenerStyle).toBeUndefined(); // old key removed
+    // The hole inherits the old mount style.
+    expect(migrated.project.board.holes[0].fastenerStyle).toBe("through-bolt");
   });
 
   it("rejects a future schema version", () => {
@@ -107,11 +136,12 @@ describe("import boundary rejects malformed .mgproj data (untrusted input)", () 
     ["an invalid unit", (p) => (p.units = "furlong"), /units/],
     ["an invalid provenance source", (p) => (p.board.holes[0].diameterMm = { known: true, value: 3, source: "guessed" }), /diameterMm/],
     ["an unsupported mount strategy", (p) => (p.mount.kind = "levitation"), /kind/],
-    ["an unsupported fastener style", (p) => (p.mount.fastenerStyle = "glue"), /fastenerStyle/],
+    ["an unsupported per-hole fastener style", (p) => (p.board.holes[0].fastenerStyle = "glue"), /fastenerStyle/],
+    ["an unsupported mount default fastener style", (p) => (p.mount.defaultFastenerStyle = "glue"), /defaultFastenerStyle/],
     ["an unsupported tolerance profile", (p) => (p.mount.tolerance = "fdm-9.99"), /tolerance/],
     ["an invalid sideTabs count", (p) => (p.mount.sideTabs = 3), /sideTabs/],
     ["a non-numeric custom tolerance value", (p) => (p.mount.customToleranceMm = "loose"), /customToleranceMm/],
-    ["a mismatched top-level/project schema version", (_p, file) => (file.project.schemaVersion = 2), /SCHEMA_MISMATCH|schema/],
+    ["a mismatched top-level/project schema version", (_p, file) => (file.project.schemaVersion = 1), /SCHEMA_MISMATCH|schema/],
     ["a malformed generated record", (p) => (p.generated = { sourceVersion: 1, key: "k", paramsHash: "h", dims: {}, warnings: [], createdAt: 0, durationMs: null }), /generated/],
     ["a malformed export record", (p) => (p.exports = [{ id: "e" }]), /exports/],
     ["a calibration marked valid with no scale", (p) => ((p.calibration.status = "valid"), (p.calibration.pxPerMm = null)), /pxPerMm/],

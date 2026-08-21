@@ -122,7 +122,7 @@ describe("generation freshness under async races", () => {
 
     const gp = useStore.getState().generate(); // captures the pre-edit model, then blocks
     // Edit the model while generation is in flight (changes the generation key).
-    useStore.getState().setThicknessMm(9.87);
+    useStore.getState().setMountField({ standoffHeightMm: 9.87 });
     release();
     await gp;
 
@@ -294,7 +294,7 @@ describe("undo/redo preserve a monotonic version and correct freshness", () => {
     await useStore.getState().generate();
     expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
     useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
-    useStore.getState().setThicknessMm(7.77); // changes the geometry key → stale
+    useStore.getState().setMountField({ standoffHeightMm: 7.77 }); // changes the geometry key → stale
     expect(isGenerationCurrent(useStore.getState().current!)).toBe(false);
     useStore.getState().undo(); // restores the previously-generated geometry
     expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
@@ -397,7 +397,7 @@ describe("export is recorded only on download", () => {
     expect(isCurrentModelExported(useStore.getState().current!)).toBe(true);
 
     // Editing after export means the current model is no longer the exported one.
-    useStore.getState().setThicknessMm(3.21);
+    useStore.getState().setMountField({ standoffHeightMm: 3.21 });
     expect(isCurrentModelExported(useStore.getState().current!)).toBe(false);
   });
 });

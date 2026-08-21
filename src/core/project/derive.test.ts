@@ -107,8 +107,9 @@ describe("isGenerationCurrent / isCurrentModelExported", () => {
     p.exports = [rec];
     expect(isCurrentModelExported(p)).toBe(true);
 
-    // An edit changes the current key; the old export no longer represents it.
-    p.board.thicknessMm = measured(2.5);
+    // A GEOMETRY edit changes the current key; the old export no longer represents it. (Board
+    // thickness is deliberately NOT in the key — it does not affect the bracket solid.)
+    p.mount.standoffHeightMm = measured(9);
     expect(isCurrentModelExported(p)).toBe(false);
   });
 });

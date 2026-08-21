@@ -241,6 +241,27 @@ function HoleEditor({ project, hole }: { project: Project; hole: MountingHole })
         <Field label="Fastener">
           <SelectField ariaLabel="Fastener" value={hole.fastener} options={FASTENERS} onChange={(f) => updateHole(hole.id, { fastener: f })} />
         </Field>
+        <Field label="Style">
+          <SelectField
+            ariaLabel="Fastener style"
+            value={hole.fastenerStyle}
+            options={[
+              { value: "heat-set-insert", label: "heat-set insert" },
+              { value: "self-tapping", label: "self-tapping" },
+              { value: "through-bolt", label: "through-bolt" },
+            ]}
+            onChange={(s) => updateHole(hole.id, { fastenerStyle: s as typeof hole.fastenerStyle })}
+          />
+        </Field>
+        <MmField
+          span2
+          label="Bore ⌀ override"
+          mm={hole.boreDiameterMm && isKnown(hole.boreDiameterMm) ? hole.boreDiameterMm.value : null}
+          placeholder="fastener-profile default"
+          onCommitMm={(v) => updateHole(hole.id, { boreDiameterMm: v })}
+          help={hole.fastener === "custom" && !(hole.boreDiameterMm && isKnown(hole.boreDiameterMm)) ? "A custom fastener needs an explicit bore — generation is blocked until one is set." : "Leave blank to use the recommended bore for this fastener + style."}
+          helpError={hole.fastener === "custom" && !(hole.boreDiameterMm && isKnown(hole.boreDiameterMm))}
+        />
         <Field span2 label="Position source">
           <div className="control is-select">
             <span className="val">
@@ -502,16 +523,30 @@ export function MountSection({ project }: { project: Project }) {
           </Field>
           <MmField label="Standoff height" mm={maybe(m.standoffHeightMm) ?? null} onCommitMm={(v) => setMountField({ standoffHeightMm: v })} />
           <MmField label="Base thickness" mm={maybe(m.baseThicknessMm) ?? null} onCommitMm={(v) => setMountField({ baseThicknessMm: v })} />
-          <Field span2 label="Fastener">
+          <Field label="Default fastener">
             <SelectField
-              ariaLabel="Fastener style"
-              value={m.fastenerStyle}
+              ariaLabel="Default fastener"
+              value={m.defaultFastener}
               options={[
-                { value: "heat-set-insert", label: `${m.fastener} heat-set insert` },
-                { value: "self-tapping", label: `${m.fastener} self-tapping` },
-                { value: "through-bolt", label: `${m.fastener} through-bolt` },
+                { value: "M2", label: "M2" },
+                { value: "M2.5", label: "M2.5" },
+                { value: "M3", label: "M3" },
+                { value: "M4", label: "M4" },
+                { value: "custom", label: "custom" },
               ]}
-              onChange={(fastenerStyle) => setMountField({ fastenerStyle })}
+              onChange={(defaultFastener) => setMountField({ defaultFastener: defaultFastener as typeof m.defaultFastener })}
+            />
+          </Field>
+          <Field label="Default style">
+            <SelectField
+              ariaLabel="Default fastener style"
+              value={m.defaultFastenerStyle}
+              options={[
+                { value: "heat-set-insert", label: "heat-set insert" },
+                { value: "self-tapping", label: "self-tapping" },
+                { value: "through-bolt", label: "through-bolt" },
+              ]}
+              onChange={(defaultFastenerStyle) => setMountField({ defaultFastenerStyle: defaultFastenerStyle as typeof m.defaultFastenerStyle })}
             />
           </Field>
           <MmField label="Boss ⌀" mm={maybe(m.bossDiameterMm) ?? null} onCommitMm={(v) => setMountField({ bossDiameterMm: v })} />

@@ -56,6 +56,7 @@ function hole(
     centerPx: { x, y },
     diameterMm: state === "confirmed" ? confirmed(3.2) : measured(3.2),
     fastener: "M3",
+    fastenerStyle: "heat-set-insert",
     positionSource,
     state,
   };
