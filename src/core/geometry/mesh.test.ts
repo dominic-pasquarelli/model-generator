@@ -192,13 +192,31 @@ describe("buildBracketMesh — one connected watertight manifold", () => {
     expect(r.effective.standoffs.map((s) => s.id).sort()).toEqual([...holeIds].sort());
   });
 
-  it("reports requested vs emitted side tabs (emitted equals the tabs actually placed)", () => {
+  it("emits exactly the requested side-tab count at requested dimensions, or blocks (reviewer #5)", () => {
     const p = createSampleProject(1_000_000);
     p.mount.sideTabs = 4;
     const r = build(p);
     expect(r.effective.requestedSideTabs).toBe(4);
-    expect(r.effective.emittedTabCount).toBe(r.effective.tabs.length);
-    expect(r.effective.emittedTabCount).toBeLessThanOrEqual(r.effective.requestedSideTabs);
+    // Hard contract: a successful build emits the request exactly — never fewer, never narrower.
+    expect(r.effective.emittedTabCount).toBe(4);
+    expect(r.effective.tabs).toHaveLength(4);
+    for (const t of r.effective.tabs) {
+      expect(t.requestedWidthMm).toBe(t.widthMm); // emitted == requested width
+      expect(t.requestedDepthMm).toBe(t.depthMm);
+    }
+  });
+
+  it("BLOCKS with TAB_PLACEMENT_FAILED when a requested tab cannot be placed at full width", () => {
+    // A standoff-bridge over two CLOSE seats yields a small footprint whose edges are shorter
+    // than a 14 mm tab (the reviewer's called-out case) — the requested tab must block, not
+    // silently narrow.
+    const p = createSampleProject(1_000_000);
+    p.mount.kind = "standoff-bridge";
+    p.mount.sideTabs = 2;
+    p.board.holes = [p.board.holes[0], { ...p.board.holes[1], centerPx: { x: 200, y: 85 } }]; // ~9 mm apart
+    const r = buildBracketMesh(p);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("TAB_PLACEMENT_FAILED");
   });
 });
 
@@ -250,6 +268,7 @@ describe("buildBracketMesh — fail-closed hardening (reviewer #1/#2)", () => {
     for (const n of [1, 2]) {
       const p = createSampleProject(1_000_000);
       p.mount.kind = "standoff-bridge";
+      p.mount.sideTabs = 0; // a tiny bridge can't host a full-width tab; isolate the footprint
       p.board.holes = p.board.holes.slice(0, n);
       const r = build(p);
       const prod = auditMesh(r.mesh);

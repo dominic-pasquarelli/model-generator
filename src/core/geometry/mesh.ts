@@ -75,6 +75,11 @@ export interface CornerReport {
 
 export interface TabReport {
   edgeIndex: number;
+  /** Requested tab dimensions (the structural contract). */
+  requestedWidthMm: number;
+  requestedDepthMm: number;
+  /** Emitted tab dimensions. A successful build emits the request exactly (reviewer #5); a tab
+   *  that cannot be placed at its requested size blocks generation rather than narrowing. */
   widthMm: number;
   depthMm: number;
   boreCenterMm: Point;
@@ -196,6 +201,9 @@ export const MIN_BORE_RADIUS_MM = 0.05;
 export const TAB_WIDTH_MM = 14;
 export const TAB_DEPTH_MM = 8;
 export const TAB_BORE_RADIUS_MM = 2;
+/** Plate the tab needs on EACH side of its base along the host edge (manufacturability +
+ *  keeps the spliced outline simple). A tab is placed at its full requested width or not at all. */
+export const MIN_TAB_EDGE_MARGIN_MM = 1;
 /** Arc segments emitted per filleted corner. */
 export const FILLET_SEGMENTS = 8;
 /** Vertex weld quantum (mm): positions rounded to this collapse to one welded vertex. */
@@ -389,11 +397,24 @@ function unit(x: number, y: number): Pt {
 // Side tabs — each tab and its bore share ONE edge-local frame (reviewer #2).
 // ----------------------------------------------------------------------------
 
-/** Index of the ring edge whose midpoint is nearest `anchor`. */
-function nearestEdge(ring: Pt[], anchor: Pt): number {
-  let best = 0;
+/** Length of ring edge `i`. */
+function edgeLength(ring: Pt[], i: number): number {
+  const a = ring[i];
+  const b = ring[(i + 1) % ring.length];
+  return Math.hypot(b.x - a.x, b.y - a.y);
+}
+
+/**
+ * Choose the host edge for a tab requested near `anchor`: the edge nearest the anchor that is
+ * long enough to host the FULL requested width plus manufacturability margin (reviewer #5). On
+ * a filleted/curved boundary this skips the short arc segments and lands on a real flat edge;
+ * returns -1 when no edge near the anchor can host the tab (the caller then blocks the build).
+ */
+function bestEdgeForTab(ring: Pt[], anchor: Pt, minLen: number): number {
+  let best = -1;
   let bestD = Infinity;
   for (let i = 0; i < ring.length; i++) {
+    if (edgeLength(ring, i) < minLen) continue;
     const a = ring[i];
     const b = ring[(i + 1) % ring.length];
     const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
@@ -406,22 +427,26 @@ function nearestEdge(ring: Pt[], anchor: Pt): number {
   return best;
 }
 
+type TabResult = { ok: true; ring: Pt[]; boreCenter: Pt } | { ok: false; reason: string };
+
 /**
- * Splice an outward rectangular tab onto edge `edgeIndex` and derive its bore centre from
- * the SAME edge-local frame (edge tangent + winding normal). Returns null when the finished
- * ring would self-intersect or the bore would fall outside the tab, so the caller drops the
- * tab with a warning rather than emitting bad geometry.
+ * Splice an outward rectangular tab onto edge `edgeIndex` at its FULL requested width (no
+ * silent narrowing — reviewer #5) and derive its bore centre from the SAME edge-local frame.
+ * Returns a coded reason instead of degrading when the tab cannot be placed at the requested
+ * size, so the caller blocks generation rather than emitting a smaller tab than was asked for.
  */
-function makeTab(ring: Pt[], edgeIndex: number, width: number, depth: number, boreR: number): { ring: Pt[]; boreCenter: Pt } | null {
+function makeTab(ring: Pt[], edgeIndex: number, width: number, depth: number, boreR: number): TabResult {
   const r = ccw(ring);
   const n = r.length;
   const a = r[edgeIndex];
   const b = r[(edgeIndex + 1) % n];
   const len = Math.hypot(b.x - a.x, b.y - a.y);
-  if (len < 1e-6) return null;
+  if (len < 1e-6) return { ok: false, reason: "the chosen plate edge is degenerate" };
+  if (width + 2 * MIN_TAB_EDGE_MARGIN_MM > len)
+    return { ok: false, reason: `the ${round2(len)} mm plate edge is too short for a ${round2(width)} mm tab (needs ${round2(width + 2 * MIN_TAB_EDGE_MARGIN_MM)} mm)` };
   const dir = { x: (b.x - a.x) / len, y: (b.y - a.y) / len };
   const nrm = { x: dir.y, y: -dir.x }; // outward for a CCW ring
-  const half = Math.min(width / 2, len / 2.2);
+  const half = width / 2; // full requested width, always
   const mid = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
   const i1 = { x: mid.x - dir.x * half, y: mid.y - dir.y * half };
   const i2 = { x: mid.x + dir.x * half, y: mid.y + dir.y * half };
@@ -429,9 +454,9 @@ function makeTab(ring: Pt[], edgeIndex: number, width: number, depth: number, bo
   const o2 = { x: i2.x + nrm.x * depth, y: i2.y + nrm.y * depth };
   const boreCenter = { x: mid.x + nrm.x * (depth / 2), y: mid.y + nrm.y * (depth / 2) };
   const newRing = [...r.slice(0, edgeIndex + 1), i1, o1, o2, i2, ...r.slice(edgeIndex + 1)];
-  if (!isSimpleRing(newRing)) return null;
-  if (!pointInRingStrict(boreCenter, newRing, boreR + CONTACT_EPS)) return null; // bore must sit inside the tab
-  return { ring: newRing, boreCenter };
+  if (!isSimpleRing(newRing)) return { ok: false, reason: "the tab would make the plate outline self-intersect" };
+  if (!pointInRingStrict(boreCenter, newRing, boreR + CONTACT_EPS)) return { ok: false, reason: "the tab bore would fall outside the tab" };
+  return { ok: true, ring: newRing, boreCenter };
 }
 
 function boreDiameter(holeDiameter: number, clearance: number, tolOffset: number, style: Project["mount"]["fastenerStyle"]): number {
@@ -620,26 +645,36 @@ export function buildBracketMesh(project: Project): MeshResult {
     if (clampedCount > 0) warnings.push(`Corner radius clamped on ${clampedCount} corner${clampedCount > 1 ? "s" : ""} to fit the adjacent edges — see per-corner effective radii in the export sidecar.`);
   }
 
-  // ---- Side tabs (spliced onto the plate boundary; each with a through bore). Each tab and
-  // its bore share one edge-local frame; a tab that cannot be placed cleanly is skipped. ----
+  // ---- Side tabs are a hard structural CONTRACT (reviewer #5): a successful build emits the
+  // requested count at the requested dimensions, or fails closed with TAB_PLACEMENT_FAILED —
+  // no silent narrowing, no skipped tab. Each tab and its bore share one edge-local frame. ----
   const bb = boundingBoxLocal(plate);
   const cx = (bb.x0 + bb.x1) / 2;
   const cy = (bb.y0 + bb.y1) / 2;
   const tabReports: TabReport[] = [];
   const tabBores: { center: Pt; r: number }[] = [];
-  const anchors: Pt[] = [];
-  if (m.sideTabs >= 2) anchors.push({ x: cx, y: bb.y0 }, { x: cx, y: bb.y1 });
-  if (m.sideTabs >= 4) anchors.push({ x: bb.x0, y: cy }, { x: bb.x1, y: cy });
+  const anchors: { pt: Pt; where: string }[] = [];
+  if (m.sideTabs >= 2) anchors.push({ pt: { x: cx, y: bb.y0 }, where: "top" }, { pt: { x: cx, y: bb.y1 }, where: "bottom" });
+  if (m.sideTabs >= 4) anchors.push({ pt: { x: bb.x0, y: cy }, where: "left" }, { pt: { x: bb.x1, y: cy }, where: "right" });
+  const minEdgeLen = TAB_WIDTH_MM + 2 * MIN_TAB_EDGE_MARGIN_MM;
   for (const anchor of anchors) {
-    const edge = nearestEdge(plate, anchor);
+    const edge = bestEdgeForTab(plate, anchor.pt, minEdgeLen);
+    if (edge < 0)
+      return fail("TAB_PLACEMENT_FAILED", `The requested ${anchor.where} side tab cannot be placed: no plate edge near it is at least ${round2(minEdgeLen)} mm long for a ${TAB_WIDTH_MM} mm tab. Widen the plate, reduce the tab count, or choose a different strategy.`, `tab:${anchor.where}`);
     const tab = makeTab(plate, edge, TAB_WIDTH_MM, TAB_DEPTH_MM, TAB_BORE_RADIUS_MM);
-    if (!tab) {
-      warnings.push("A side tab could not be placed on the selected edge without self-intersecting and was skipped.");
-      continue;
-    }
+    if (!tab.ok) return fail("TAB_PLACEMENT_FAILED", `The requested ${anchor.where} side tab cannot be placed: ${tab.reason}. Widen the plate, reduce the tab count, or choose a different strategy.`, `tab:${anchor.where}`);
     plate = tab.ring;
     tabBores.push({ center: tab.boreCenter, r: TAB_BORE_RADIUS_MM });
-    tabReports.push({ edgeIndex: edge, widthMm: TAB_WIDTH_MM, depthMm: TAB_DEPTH_MM, boreCenterMm: tab.boreCenter, boreRadiusMm: TAB_BORE_RADIUS_MM });
+    // Emitted == requested (we would have failed otherwise); reported explicitly to prove it.
+    tabReports.push({
+      edgeIndex: edge,
+      requestedWidthMm: TAB_WIDTH_MM,
+      requestedDepthMm: TAB_DEPTH_MM,
+      widthMm: TAB_WIDTH_MM,
+      depthMm: TAB_DEPTH_MM,
+      boreCenterMm: tab.boreCenter,
+      boreRadiusMm: TAB_BORE_RADIUS_MM,
+    });
   }
 
   if (!isSimpleRing(plate)) return fail("PLATE_NOT_SIMPLE", "The plate outline self-intersects after applying corner radius/tabs.");

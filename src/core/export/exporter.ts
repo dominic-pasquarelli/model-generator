@@ -63,7 +63,7 @@ export interface ExportParameters {
    *  differ, and the sidecar shows both rather than implying the request was honoured. */
   requestedSideTabs: 0 | 2 | 4;
   emittedTabCount: number;
-  tabs: { edgeIndex: number; widthMm: number; depthMm: number; boreCenterMm: { x: number; y: number }; boreRadiusMm: number }[];
+  tabs: { edgeIndex: number; requestedWidthMm: number; requestedDepthMm: number; widthMm: number; depthMm: number; boreCenterMm: { x: number; y: number }; boreRadiusMm: number }[];
   /** Effective plate outline the solid was built on (board-space mm). */
   plateOutlineMm: { x: number; y: number }[];
   /** Requested board outline (mm) when the strategy consumes it, else null. */
@@ -194,6 +194,8 @@ function buildParameters(project: Project, effective: EffectiveParams): ExportPa
     emittedTabCount: effective.emittedTabCount,
     tabs: effective.tabs.map((t) => ({
       edgeIndex: t.edgeIndex,
+      requestedWidthMm: t.requestedWidthMm,
+      requestedDepthMm: t.requestedDepthMm,
       widthMm: t.widthMm,
       depthMm: t.depthMm,
       boreCenterMm: { x: t.boreCenterMm.x, y: t.boreCenterMm.y },
