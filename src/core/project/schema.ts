@@ -22,11 +22,13 @@ const MAX_COORD = 1_000_000; // px magnitude for any stored coordinate
 // Per-collection caps sized to real boards, not the old defensive-but-huge values (reviewer
 // #3). A carrier board with 200 mounting holes or keep-outs is already implausible; combined
 // with the total-work budget below, this bounds the O(n²) simple-ring / feature-spacing work.
-const MAX_HOLES = 200;
-const MAX_KEEPOUTS = 200;
-const MAX_EXPORTS = 2_000;
+// Exported so the SAME limits gate states created through the UI (reviewer #2), not only the
+// import boundary — an editor must never be able to build a state its own parser rejects.
+export const MAX_HOLES = 200;
+export const MAX_KEEPOUTS = 200;
+export const MAX_EXPORTS = 2_000;
 const MAX_RING_VERTICES = 512;
-const MAX_STRING = 8_192;
+export const MAX_STRING = 8_192;
 const MAX_REF_SRC_BYTES = 12_000_000;
 /**
  * Total-work budget across the whole board (reviewer #3): the sum of every ring's vertex
@@ -583,4 +585,19 @@ export function validateProjectShape(project: Record<string, unknown>): void {
   req(Array.isArray(project.exports) && (project.exports as unknown[]).length <= MAX_EXPORTS, "exports (count)");
   (project.exports as unknown[]).forEach((e, i) => validateExportRecord(e, `exports[${i}]`));
   assertUniqueIds(project.exports as { id?: unknown }[], "exports");
+}
+
+/**
+ * Round-trip guard (reviewer #2): does this in-memory project survive its OWN parser? The
+ * editor must never save or download a state it cannot reopen, so store mutations and
+ * serialization consult this. Returns a typed result rather than throwing so callers can
+ * surface a user-visible failure and leave the durable state untouched.
+ */
+export function projectRoundTrips(project: Project): { ok: true } | { ok: false; error: string } {
+  try {
+    validateProjectShape(project as unknown as Record<string, unknown>);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof MgFileError ? `${e.code}: ${e.message}` : "Project cannot be re-opened by this version." };
+  }
 }

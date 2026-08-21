@@ -10,7 +10,7 @@ import {
   __setGeneratorForTest,
 } from "./store";
 import { createSampleProject } from "@/core/project/fixtures";
-import { serializeProject, createProject } from "@/core/project/schema";
+import { serializeProject, createProject, parseProjectFile, MAX_HOLES, MAX_KEEPOUTS } from "@/core/project/schema";
 import { generationKey, isCurrentModelExported, isGenerationCurrent } from "@/core/project/derive";
 import { mockGenerator } from "@/core/geometry/mockGenerator";
 import { isKnown } from "@/core/project/value";
@@ -298,6 +298,42 @@ describe("undo/redo preserve a monotonic version and correct freshness", () => {
     expect(isGenerationCurrent(useStore.getState().current!)).toBe(false);
     useStore.getState().undo(); // restores the previously-generated geometry
     expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
+  });
+});
+
+describe("every UI-created state round-trips through the parser (reviewer #2)", () => {
+  const roundTrips = () => expect(() => parseProjectFile(serializeProject(useStore.getState().current!))).not.toThrow();
+
+  it("parseProjectFile(serializeProject(project)) succeeds after each public mutation", () => {
+    openSample();
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    roundTrips();
+    useStore.getState().setBoardName("x".repeat(20_000)); // clamped to the string cap, still valid
+    roundTrips();
+    useStore.getState().setBoardRevision("rev-" + "y".repeat(20_000));
+    roundTrips();
+    useStore.getState().addHoleAtCenter();
+    roundTrips();
+    useStore.getState().addKeepOutCenter();
+    roundTrips();
+    useStore.getState().setMountField({ standoffHeightMm: 8, defaultFastener: "M4" });
+    roundTrips();
+    useStore.getState().setThicknessMm(1.9);
+    roundTrips();
+    const hole = useStore.getState().current!.board.holes[0];
+    useStore.getState().updateHole(hole.id, { fastenerStyle: "self-tapping", boreDiameterMm: 2.6 });
+    roundTrips();
+  });
+
+  it("caps holes and keep-outs at the parser limit — the UI can't build an un-openable state", () => {
+    const p = openSample();
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ ...p.board.holes[0], id: `h-${i}`, label: `H${i}` }));
+    useStore.setState({ current: { ...p, board: { ...p.board, holes: many(MAX_HOLES), keepOuts: p.board.keepOuts.slice(0, MAX_KEEPOUTS) } } });
+    const holesBefore = useStore.getState().current!.board.holes.length;
+    useStore.getState().addHoleAtCenter();
+    expect(useStore.getState().current!.board.holes.length, "add is a no-op at the cap").toBe(holesBefore);
+    // The at-cap state still round-trips.
+    expect(() => parseProjectFile(serializeProject(useStore.getState().current!))).not.toThrow();
   });
 });
 

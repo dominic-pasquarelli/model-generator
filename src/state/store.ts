@@ -9,7 +9,7 @@ import type { Point, Rect } from "@/core/geom";
 import { bbox, normalizeRect } from "@/core/geom";
 import { boardFrame, boardMmToPxPoint, generationKey, inferredFabricationDims, isGenerationCurrent } from "@/core/project/derive";
 import { createSeedLibrary } from "@/core/project/fixtures";
-import { createProject, parseProjectFile, serializeProject, MgFileError } from "@/core/project/schema";
+import { createProject, parseProjectFile, projectRoundTrips, serializeProject, MgFileError, MAX_HOLES, MAX_KEEPOUTS, MAX_EXPORTS, MAX_STRING } from "@/core/project/schema";
 import type {
   BoardSide,
   CalibrationSourceKind,
@@ -630,8 +630,9 @@ export const useStore = create<AppState>((set, get) => {
       const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
       commit(projectsNext, { current: next });
     },
-    setBoardName: (name) => mutate((p) => void (p.board.name = name)),
-    setBoardRevision: (rev) => mutate((p) => void (p.board.revision = rev)),
+    // Clamp editable strings to the parser's length bound so a saved project always re-opens.
+    setBoardName: (name) => mutate((p) => void (p.board.name = name.slice(0, MAX_STRING))),
+    setBoardRevision: (rev) => mutate((p) => void (p.board.revision = rev.slice(0, MAX_STRING))),
     setThicknessMm: (mm) => mutate((p) => void (p.board.thicknessMm = valFromInput(mm, p.board.thicknessMm))),
 
     addSampleReference: () =>
@@ -772,6 +773,8 @@ export const useStore = create<AppState>((set, get) => {
       }),
 
     addHoleAt: (centerImg) => {
+      // Never let the UI exceed the parser's cap (reviewer #2) — a saved board must re-open.
+      if ((get().current?.board.holes.length ?? 0) >= MAX_HOLES) return;
       mutate((p) => {
         const label = nextLabel("H", p.board.holes);
         p.board.holes.push({
@@ -841,6 +844,7 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     addKeepOutRect: (a, b) => {
+      if ((get().current?.board.keepOuts.length ?? 0) >= MAX_KEEPOUTS) return;
       mutate((p) => {
         p.board.keepOuts.push({
           id: uid("ko"),
@@ -1017,7 +1021,10 @@ export const useStore = create<AppState>((set, get) => {
       const current = get().current;
       if (!art || !current) return;
       if (current.exports.some((e) => e.id === art.record.id)) return; // already recorded
-      const next = { ...current, exports: [art.record, ...current.exports] };
+      // Deliberate retention policy (reviewer #2): the ledger keeps the most recent MAX_EXPORTS
+      // records so it can never cross the parser cap and make the project un-openable. Newest
+      // first; older records are archived out rather than growing unbounded.
+      const next = { ...current, exports: [art.record, ...current.exports].slice(0, MAX_EXPORTS) };
       const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
       commit(projectsNext, { current: next });
     },
@@ -1050,6 +1057,13 @@ export const useStore = create<AppState>((set, get) => {
     downloadProjectFile: (id) => {
       const project = id ? get().projects.find((p) => p.id === id) : get().current;
       if (!project) return;
+      // Never hand the user a file this version cannot re-open (reviewer #2). The mutation
+      // guards keep this from firing in practice; it's the last-line invariant check.
+      const rt = projectRoundTrips(project);
+      if (!rt.ok) {
+        set({ saveState: "error", lastSaveError: `Cannot export project file — it would not re-open (${rt.error}).` });
+        return;
+      }
       const safe = project.name.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase() || "project";
       downloadTextFile(`${safe}_v${project.version}.mgproj`, serializeProject(project), "application/json");
     },
