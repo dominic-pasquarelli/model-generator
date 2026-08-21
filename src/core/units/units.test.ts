@@ -1,12 +1,15 @@
 import { describe, it, expect } from "vitest";
 import {
   assessCalibration,
+  fmtLen,
   fromDisplay,
   inchToMm,
   mmToInch,
   mmLengthToPx,
   pxLengthToMm,
   toDisplay,
+  unitDecimals,
+  unitLabel,
 } from "./units";
 
 describe("unit conversion", () => {
@@ -14,6 +17,15 @@ describe("unit conversion", () => {
     expect(mmToInch(25.4)).toBeCloseTo(1, 10);
     expect(inchToMm(1)).toBeCloseTo(25.4, 10);
     expect(fromDisplay(toDisplay(12.7, "inch"), "inch")).toBeCloseTo(12.7, 10);
+  });
+
+  it("formats lengths in the display unit with unit-appropriate precision", () => {
+    expect(fmtLen(85, "mm")).toBe("85.00");
+    expect(fmtLen(25.4, "inch")).toBe("1.000");
+    expect(unitDecimals("mm")).toBe(2);
+    expect(unitDecimals("inch")).toBe(3);
+    expect(unitLabel("mm")).toBe("mm");
+    expect(unitLabel("inch")).toBe("in");
   });
 
   it("passes mm through unchanged in mm display", () => {

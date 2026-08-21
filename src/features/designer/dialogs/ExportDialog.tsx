@@ -8,8 +8,10 @@ import { Icon } from "@/icons/Icon";
 import type { Project } from "@/core/project/types";
 import { exportReadiness } from "@/core/validation/validate";
 import { exportFileName } from "@/core/export/exporter";
+import { inferredFabricationDims } from "@/core/project/derive";
+import { fmtLen, unitLabel } from "@/core/units/units";
 import { hashLabel } from "@/lib/format";
-import { downloadArtifact, useStore } from "@/state/store";
+import { useStore } from "@/state/store";
 
 export function ExportDialog({ project }: { project: Project }) {
   const ex = useStore((s) => s.ui.export);
@@ -20,6 +22,7 @@ export function ExportDialog({ project }: { project: Project }) {
   const cancelExport = useStore((s) => s.cancelExport);
   const retryExport = useStore((s) => s.retryExport);
   const commitExportDownload = useStore((s) => s.commitExportDownload);
+  const toggleAckInferred = useStore((s) => s.toggleAckInferred);
   const setStep = useStore((s) => s.setStep);
 
   // Closing the export dialog returns the user to the synchronized preview.
@@ -31,6 +34,12 @@ export function ExportDialog({ project }: { project: Project }) {
   const readiness = exportReadiness(project);
   const fileName = exportFileName(project, ex.format);
   const paramsHash = project.generated?.paramsHash;
+  const inferredDims = inferredFabricationDims(project);
+  const genWarnings = project.generated?.warnings ?? [];
+  // Export honesty policy (reviewer #5C): inferred fabrication dimensions ARE exported, so the
+  // user must explicitly acknowledge them first. Measured-only models need no acknowledgement.
+  const needsAck = inferredDims.length > 0;
+  const canExport = readiness.ready && (!needsAck || ex.acknowledgedInferred);
 
   // ----- progress -----
   if (ex.phase === "progress") {
@@ -126,9 +135,9 @@ export function ExportDialog({ project }: { project: Project }) {
               variant="primary"
               icon="export"
               onClick={() => {
-                // Record the export in history ONLY when the download is actually initiated.
+                // Download AND record are one gated step: the export is recorded in history only
+                // when the download actually initiates (reviewer #6).
                 commitExportDownload();
-                downloadArtifact(ex.artifact!);
               }}
             >
               Download files
@@ -137,8 +146,14 @@ export function ExportDialog({ project }: { project: Project }) {
         }
       >
         <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 6 }}>
-          Prepared in memory. Download to write the files — nothing is recorded as exported until you do.
+          Prepared in memory. Download to write the files — nothing is recorded as exported until the download starts.
         </div>
+        {ex.downloadError ? (
+          <div role="alert" style={{ marginBottom: 8, fontSize: 11.5, color: "var(--danger, #ffb4a8)", display: "flex", gap: 6, alignItems: "flex-start" }}>
+            <Icon name="triangle" style={{ width: 13, height: 13, marginTop: 1 }} />
+            <span>Download did not start ({ex.downloadError}). Nothing was recorded — try again.</span>
+          </div>
+        ) : null}
         <FileBox
           icon="file"
           name={ex.artifact.fileName}
@@ -146,7 +161,7 @@ export function ExportDialog({ project }: { project: Project }) {
         />
         <MetaGrid
           rows={[
-            { dt: "Units", dd: meta.units },
+            { dt: "Units", dd: <>{meta.geometryUnits} geometry · {meta.displayUnits} display</> },
             { dt: "Schema", dd: <>v{meta.schemaVersion} · params <span className="mono">{hashLabel(meta.paramsHash ?? "—")}</span></> },
             { dt: "Sidecar", dd: <span className="mono">{ex.artifact.sidecar ? fileName.replace(/\.(step|stl)$/, ".meta.json") : "—"}</span> },
           ]}
@@ -179,7 +194,7 @@ export function ExportDialog({ project }: { project: Project }) {
             Cancel
           </Button>
           <Spacer />
-          <Button size="sm" variant="primary" icon="export" disabled={!ready} onClick={runExport}>
+          <Button size="sm" variant="primary" icon="export" disabled={!canExport} onClick={runExport}>
             Export {ex.format.toUpperCase()}
           </Button>
         </>
@@ -200,7 +215,7 @@ export function ExportDialog({ project }: { project: Project }) {
               Will be recorded
             </div>
             <div style={{ fontSize: 11, color: "var(--text-2)", lineHeight: 1.8 }}>
-              Units <b>{project.units}</b>
+              Geometry <b>mm</b> · display <b>{project.units}</b>
               <br />
               Schema <b>v{project.schemaVersion}</b>
               <br />
@@ -210,7 +225,52 @@ export function ExportDialog({ project }: { project: Project }) {
             </div>
           </div>
         </div>
-      ) : (
+      ) : null}
+
+      {ready && genWarnings.length > 0 ? (
+        <div style={{ marginTop: 12 }}>
+          <div className="insp-title" style={{ marginBottom: 6 }}>
+            Generation warnings ({genWarnings.length})
+          </div>
+          {genWarnings.map((w, i) => (
+            <div key={i} style={{ fontSize: 11, color: "var(--warn)", display: "flex", gap: 6, alignItems: "flex-start", marginBottom: 4 }}>
+              <Icon name="triangle" style={{ width: 12, height: 12, marginTop: 1 }} />
+              <span>{w}</span>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {ready && needsAck ? (
+        <div style={{ marginTop: 12, border: "1px solid var(--warn)", borderRadius: 8, padding: "10px 12px", background: "var(--warn-bg, #2a220c)" }}>
+          <div className="insp-title" style={{ marginBottom: 6 }}>
+            Inferred fabrication dimensions ({inferredDims.length})
+          </div>
+          <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 6 }}>
+            These values were <b>inferred</b> as sensible defaults, not measured or confirmed. They will be exported. (No
+            dimension is <b>Unknown</b> — those block export entirely.)
+          </div>
+          <div style={{ fontSize: 11.5, lineHeight: 1.9 }}>
+            {inferredDims.map((d) => (
+              <div key={d.label}>
+                <span className="mono" style={{ color: "var(--warn)" }}>
+                  inferred
+                </span>{" "}
+                {d.label}: <b>{fmtLen(d.valueMm, project.units)}</b> {unitLabel(project.units)}
+              </div>
+            ))}
+          </div>
+          <div style={{ marginTop: 8 }}>
+            <Checkbox
+              checked={ex.acknowledgedInferred}
+              onChange={toggleAckInferred}
+              label={<>I understand these fabrication dimensions are inferred defaults, and choose to export them.</>}
+            />
+          </div>
+        </div>
+      ) : null}
+
+      {!ready ? (
         <div>
           <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 9 }}>
             Export writes only trustworthy geometry. Resolve these first:
@@ -229,9 +289,11 @@ export function ExportDialog({ project }: { project: Project }) {
               }
             />
           ))}
-          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>Nothing is exported with guessed values.</div>
+          <div style={{ fontSize: 11, color: "var(--text-3)", marginTop: 4 }}>
+            Unknown dimensions block export. Inferred defaults are exported only after you acknowledge them.
+          </div>
         </div>
-      )}
+      ) : null}
 
       <div className="hr" />
       <div className="insp-title" style={{ marginBottom: 8 }}>
@@ -242,22 +304,23 @@ export function ExportDialog({ project }: { project: Project }) {
           selected={ex.format === "step"}
           name="STEP"
           ext=".step"
-          desc="Target format for CAD refinement in Fusion. This build emits a STEP container placeholder — a real solid body awaits the geometry kernel."
+          desc="Real faceted B-rep solid (ISO-10303-21 AP214 structure). Curved walls are facets, not analytic surfaces; validated against internal properties, not an independent kernel; Fusion import is not yet verified."
           onSelect={() => setFormat("step")}
         />
         <RadioCard
           selected={ex.format === "stl"}
           name="STL"
           ext=".stl"
-          desc="Mesh format for print preview and diagnostics. This build emits a placeholder mesh, not a generated surface."
+          desc="Generated ASCII STL mesh of the watertight solid; downstream slicer compatibility is not yet verified."
           onSelect={() => setFormat("stl")}
         />
       </div>
       <div style={{ display: "flex", gap: 7, marginTop: 10, fontSize: 11, color: "var(--info)", alignItems: "flex-start" }}>
         <Icon name="info" style={{ width: 13, height: 13, marginTop: 1 }} />
         <div>
-          This build ships an illustrative generator — the artifact is a real metadata sidecar plus a labelled
-          placeholder, not a validated CAD solid. STEP-into-Fusion is the deferred evidence gate (ADR 0006).
+          Real geometry from the canonical model, with a full parameter sidecar. STEP is a faceted B-rep and STL a
+          watertight mesh — both host-level verified against internal properties, not an independent CAD kernel or
+          slicer. Autodesk Fusion import and printed-part fit are not yet verified (the deferred evidence gate, ADR 0006).
         </div>
       </div>
       <div className="fgrid" style={{ marginTop: 12 }}>

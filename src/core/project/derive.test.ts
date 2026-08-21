@@ -103,12 +103,13 @@ describe("isGenerationCurrent / isCurrentModelExported", () => {
   it("distinguishes 'has any export' from 'current model exported'", () => {
     const p = createSampleProject(1);
     const key = generationKey(p)!;
-    const rec: ExportRecord = { id: "e", format: "step", fileName: "x.step", sizeBytes: 1, paramsHash: key, generationKey: key, createdAt: 0, wroteSidecar: false };
+    const rec: ExportRecord = { id: "e", format: "step", fileName: "x.step", sizeBytes: 1, artifactSha256: "0".repeat(64), paramsHash: key, generationKey: key, projectId: p.id, projectVersion: p.version, createdAt: 0, wroteSidecar: false };
     p.exports = [rec];
     expect(isCurrentModelExported(p)).toBe(true);
 
-    // An edit changes the current key; the old export no longer represents it.
-    p.board.thicknessMm = measured(2.5);
+    // A GEOMETRY edit changes the current key; the old export no longer represents it. (Board
+    // thickness is deliberately NOT in the key — it does not affect the bracket solid.)
+    p.mount.standoffHeightMm = measured(9);
     expect(isCurrentModelExported(p)).toBe(false);
   });
 });

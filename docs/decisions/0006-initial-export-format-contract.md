@@ -2,10 +2,10 @@
 title: ADR 0006 Initial Export Format Contract
 tier: decision
 adr: 0006
-status: proposed
+status: accepted
 date: 2026-08-16
-updated: 2026-08-16
-audited: 2026-08-16
+updated: 2026-08-20
+audited: 2026-08-20
 related:
   - docs/ARCHITECTURE.md
   - docs/workflows/BOARD_MOUNT_DESIGNER.md
@@ -15,7 +15,19 @@ related:
 
 ## Status
 
-Proposed. Experiment required.
+Accepted (2026-08-19). **STL and STEP export are Built and Verified host-level.** Both write real geometry from the shared solid path (ADR 0005). The **Fusion import evidence gate remains OPEN** — no `evidence/fusion-import/` record exists yet — so the "usable in Fusion" claim is not earned.
+
+## Decision (2026-08-19)
+
+Two formats ship, both real, both derived from the same generated solid the preview consumes:
+
+- **STL** (`src/core/export/stl.ts`): a genuine ASCII STL — a watertight mesh of the solid, with per-facet normals. Host-verified: one facet per mesh triangle, deterministic bytes for an unchanged model. Honesty boundary: downstream slicer compatibility is **not** verified against any real slicer.
+- **STEP** (`src/core/export/step.ts`): a real **faceted** B-rep, ISO-10303-21 **AP214**. The bracket is a **single connected body**, so the part is exactly one `MANIFOLD_SOLID_BREP` closed shell (the writer emits one shell per body and the generator produces one body); welded `VERTEX_POINT`s; each edge is a shared `EDGE_CURVE` referenced by its two faces with opposite `ORIENTED_EDGE` sense. Host-verified against these **internal structural properties** — well-formed envelope, every `#id` reference resolves, one closed shell per body, one `ADVANCED_FACE` per triangle, and every edge shared by exactly two faces with opposite sense (closed manifold at the entity level) — **not** by an independent EXPRESS/AP214 kernel, so "valid AP214" is scoped to those internal checks.
+- **Metadata sidecar** (`*.meta.json`): real, and records schema version, geometry-vs-display units, generator + kernel provenance, `paramsHash`, a deterministic `meshHash`, generated bounding dimensions, body/triangle counts, warnings, an explicit `unsupportedClaims` list, and the **full effective parameter snapshot plus the exact pure-mm `geometryRecipe`** — every fabrication dimension with requested-vs-effective provenance, the plate outline, per-corner fillet result, tab geometry, per-standoff bore table, keep-out subtract/skip decisions, tessellation count, and weld/contact tolerances. `assembleSolid` reconstructs the identical solid from `geometryRecipe` (verified by `meshHash`).
+
+Honesty boundary, unchanged and enforced in the artifact note: the STEP is **faceted** (curved standoff walls are facets, not analytic surfaces), and **Fusion import and printed-part fit are unverified**. The export UI and sidecar state this; nothing claims a validated CAD import.
+
+The claim table below is updated to what evidence exists today.
 
 ## Question
 
@@ -49,12 +61,12 @@ STL may be emitted for preview, slicer diagnostics, or print follow-up, but STL 
 
 ## Supported Claims After The Gate
 
-| Evidence | Allowed Claim |
-|---|---|
-| STEP generated but not imported | Export artifact produced for inspection only. |
-| STEP imports into Fusion with correct scale and dimensions | STEP export is usable for the named fixture and Fusion version. |
-| STL generated from same model | Mesh export is available as secondary/diagnostic output. |
-| Printed part checked | Physical fit claim only for the named board, printer/material/profile, and tolerance notes. |
+| Evidence | Allowed Claim | Current status (2026-08-19) |
+|---|---|---|
+| STEP generated (faceted) but not imported | Export artifact produced for inspection only; AP214 closed-shell solid that is structurally consistent by internal checks (reference-complete graph, one closed shell, edges shared by two oppositely-sensed faces) — NOT validated by an independent EXPRESS/AP214 kernel. | ✅ Earned (host-level, internal checks only). |
+| STEP imports into Fusion with correct scale and dimensions | STEP export is usable for the named fixture and Fusion version. | ❌ Not earned — no `evidence/fusion-import/` record yet. |
+| STL generated from same model | Mesh export is available as a real, watertight mesh; downstream slicer compatibility is unverified. | ✅ Earned (host-level; slicer import not tested). |
+| Printed part checked | Physical fit claim only for the named board, printer/material/profile, and tolerance notes. | ❌ Not earned. |
 
 ## Blocked Until Evidence Exists
 

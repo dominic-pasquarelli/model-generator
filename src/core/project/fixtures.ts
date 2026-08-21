@@ -12,6 +12,8 @@ import type { Calibration, KeepOut, MountingHole, Project, ReferenceImage } from
 import { confirmed, measured } from "./value";
 
 const DAY = 24 * 60 * 60 * 1000;
+/** A timestamp `ms` before `now`, floored at 0 — illustrative fixtures never pre-date the epoch. */
+const ago = (now: number, ms: number) => Math.max(0, now - ms);
 
 function sampleReference(now: number): ReferenceImage {
   return {
@@ -54,6 +56,7 @@ function hole(
     centerPx: { x, y },
     diameterMm: state === "confirmed" ? confirmed(3.2) : measured(3.2),
     fastener: "M3",
+    fastenerStyle: "heat-set-insert",
     positionSource,
     state,
   };
@@ -109,9 +112,9 @@ function sampleOutline() {
 
 /** Fully-populated, generatable project (one inferred hole → a single warning, zero errors). */
 export function createSampleProject(now = Date.now()): Project {
-  const p = createProject({ name: "cm4-carrier-mount-a", now: now - 2 * 60 * 60 * 1000 });
+  const p = createProject({ name: "cm4-carrier-mount-a", now: ago(now, 2 * 60 * 60 * 1000) });
   p.version = 14;
-  p.updatedAt = now - 2 * 60 * 60 * 1000;
+  p.updatedAt = ago(now, 2 * 60 * 60 * 1000);
   p.reference = sampleReference(p.createdAt);
   p.calibration = sampleCalibration(p.createdAt);
   p.board.name = "MG-DEV-01";
@@ -130,9 +133,9 @@ export function createSampleProject(now = Date.now()): Project {
 
 /** A lighter generated draft for the library grid. */
 export function createGeneratedDraft(now = Date.now()): Project {
-  const p = createProject({ name: "sensor-node-bracket", now: now - DAY });
+  const p = createProject({ name: "sensor-node-bracket", now: ago(now, DAY) });
   p.version = 8;
-  p.updatedAt = now - DAY;
+  p.updatedAt = ago(now, DAY);
   p.reference = sampleReference(p.createdAt);
   p.calibration = sampleCalibration(p.createdAt);
   p.board.name = "SN-2";
@@ -146,9 +149,9 @@ export function createGeneratedDraft(now = Date.now()): Project {
 
 /** An early uncalibrated draft — reference added, nothing measured yet. */
 export function createUncalibratedDraft(now = Date.now()): Project {
-  const p = createProject({ name: "relay-driver-mount", now: now - 5 * DAY });
+  const p = createProject({ name: "relay-driver-mount", now: ago(now, 5 * DAY) });
   p.version = 2;
-  p.updatedAt = now - 5 * DAY;
+  p.updatedAt = ago(now, 5 * DAY);
   p.reference = sampleReference(p.createdAt);
   p.board.name = "";
   return p;

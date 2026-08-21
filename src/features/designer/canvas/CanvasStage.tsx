@@ -1,15 +1,18 @@
+import { useMemo } from "react";
 import { cn } from "@/lib/cn";
-import { BRACKET_ISO_SRC } from "@/assets";
 import { Icon } from "@/icons/Icon";
 import { Kbd } from "@/components/ui/Badge";
 import type { Project } from "@/core/project/types";
 import { outlineDims } from "@/core/project/derive";
-import { fmt } from "@/lib/format";
+import { fmtLen, unitLabel } from "@/core/units/units";
 import { useStore } from "@/state/store";
 import { CanvasToolbar, StatusBar, ZoomControl } from "./chrome";
 import { EmptyState } from "./EmptyState";
 import { Viewport2D } from "./Viewport2D";
 import { Preview3D } from "./Preview3D";
+import { MeshView3D } from "./MeshView3D";
+import { previewModel } from "./previewModel";
+import { useLiveBuild } from "./useLiveBuild";
 import { CalibrationPopover } from "../dialogs/CalibrationPopover";
 import { ExportDialog } from "../dialogs/ExportDialog";
 
@@ -77,7 +80,7 @@ function ContextPill({ project, step }: { project: Project; step: string }) {
     return (
       <div className="cv-pill" style={{ left: 20, bottom: 46 }}>
         <Icon name="square-outline" />
-        Outline <b>{fmt(dims.widthMm)} × {fmt(dims.heightMm)} mm</b>
+        Outline <b>{fmtLen(dims.widthMm, project.units)} × {fmtLen(dims.heightMm, project.units)} {unitLabel(project.units)}</b>
       </div>
     );
   }
@@ -90,6 +93,13 @@ function ContextPill({ project, step }: { project: Project; step: string }) {
     );
   }
   return null;
+}
+
+/** Export-mode 3D view. Renders the same keyed build the STL/STEP exporters serialise. */
+function Export3DView({ project }: { project: Project }) {
+  const build = useLiveBuild(project);
+  const preview = useMemo(() => previewModel(project, build), [project, build]);
+  return <MeshView3D mesh={preview.ok ? preview.mesh : null} view="fit" />;
 }
 
 export function CanvasStage({ project }: { project: Project }) {
@@ -138,11 +148,7 @@ export function CanvasStage({ project }: { project: Project }) {
 
         {mode === "export3d" ? (
           <>
-            <img
-              src={BRACKET_ISO_SRC}
-              alt="Illustrative generated bracket"
-              style={{ position: "absolute", left: "50%", top: "46%", transform: "translate(-50%,-50%)", width: 560, maxWidth: "70%", opacity: 0.95 }}
-            />
+            <Export3DView project={project} />
             <ExportDialog project={project} />
           </>
         ) : null}

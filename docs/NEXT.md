@@ -2,8 +2,8 @@
 title: Next
 tier: record
 status: living
-updated: 2026-08-17
-audited: 2026-08-17
+updated: 2026-08-19
+audited: 2026-08-19
 related:
   - docs/PROJECT_VISION.md
   - docs/ARCHITECTURE.md
@@ -20,39 +20,42 @@ related:
 
 ## START HERE
 
-The Phase 1 app skeleton and the first interactive Board Mount Designer spike are now Built in `src/` (see HISTORY 2026-08-17) and Verified at browser and host level (26 unit tests + 6 Playwright cases pass; `tsc` and `vite build` clean). Run it with `pnpm install` then `pnpm dev`; check it with `pnpm test` and `pnpm exec playwright test`.
+The Board Mount Designer now **generates a real solid** and exports real files (see HISTORY 2026-08-19/2026-08-20). Verified host/browser level (129 unit tests + 9 Playwright cases pass; `tsc` and `vite build` clean; doc-audit passes). Run it with `pnpm install` then `pnpm dev`; check it with `pnpm test` and `pnpm exec playwright test`.
 
-The shell ships a deterministic **illustrative** generator behind a real `GeometryAdapter` seam (`src/core/geometry/`); it is not a solid kernel and cannot emit a valid STEP. The next blocking work is the geometry/export spike: implement a real kernel behind that unchanged adapter, then produce a valid STEP and record the Fusion import evidence. Follow [the geometry generation plan](plans/GEOMETRY_GENERATION_PLAN.md) and [the STEP export plan](plans/STEP_EXPORT_PLAN.md), and update ADRs 0005 and 0006 with measured evidence.
+A dependency-free solid generator (`src/core/geometry/mesh.ts`, `buildBracketMesh`) builds a **single connected, watertight, manifold** bracket from the canonical model — plate faces are triangulated with the standoff/bore/keep-out circles as holes and every feature shares welded vertices, so the whole artifact is one connected component (no boolean kernel). A production, fail-closed aggregate audit (`auditMesh`) proves one connected component, edge-manifoldness, consistent orientation, single vertex fans, and positive volume before any preview or export is returned. ONE **keyed build service** owns generation: the store runs `buildBracketMesh` in a Web Worker (`geometryWorker.ts` via `buildClient.ts`), caches the immutable result under the canonical generation key, and the live 3D preview + its dimension/warning readouts, semantic validation (which never runs the kernel), and the STL (watertight mesh; slicer compatibility unverified) + STEP (real **faceted** B-rep, one `MANIFOLD_SOLID_BREP`, checked against internal properties, not an independent AP214 kernel) exporters all consume that ONE cached build — so preview, validation, and export never disagree and the kernel never runs synchronously on the main thread. STL/STEP serialization + artifact hashing run off-thread as a separate cancellable job (`exportWorker.ts` via `exportClient.ts`), and an export is recorded in history only on a confirmed download initiation. Geometry is authored in **millimetres**; mm/inch is a display-only toggle. `.mgproj` save/open (validated as an untrusted boundary), version-monotonic undo/redo, and a full auditable parameter sidecar work. ADRs 0004 (canonical model), 0005 (kernel), 0006 (export), and 0007 (project file) are now Accepted.
 
-This branch is ready for reviewer feedback on the shell.
+The next blocking work is the **evidence gates the code cannot self-verify**: import the exported STEP into Autodesk Fusion and record `evidence/fusion-import/` (ADR 0006 gate), then a first printed-part fit. After that: automatic board detection from an image, and camera/skew-aware calibration. Follow [the STEP export plan](plans/STEP_EXPORT_PLAN.md) and [the image/calibration plan](plans/IMAGE_CALIBRATION_PLAN.md).
 
 ## Active Follow-Through
 
 | Order | Work | Exit Condition | Evidence |
 |---:|---|---|---|
-| 1 | Geometry kernel behind the adapter | ADR 0005 updated; a real solid replaces the mock generator | Generated-dimension checks against fixtures; [plan](plans/GEOMETRY_GENERATION_PLAN.md) |
-| 2 | STEP export + Fusion gate | ADR 0006 updated with supported/unsupported claims | Valid STEP + `evidence/fusion-import/` result; [plan](plans/STEP_EXPORT_PLAN.md) |
-| 3 | Hardened project schema + persistence | ADRs 0004 and 0007 updated; real file format + migrations replace localStorage drafts | Migration tests, corrupt-file handling; [plan](plans/PROJECT_SCHEMA_PERSISTENCE_PLAN.md) |
-| 4 | Image/calibration robustness + privacy | ADR 0008 accepted or narrowed; camera + skew-aware calibration | Upload/reference handling decision; [plan](plans/IMAGE_CALIBRATION_PLAN.md) |
+| 1 | **Fusion import evidence gate** | ADR 0006 "usable in Fusion" row earned | Import exported STEP into Fusion; record `evidence/fusion-import/`; [plan](plans/STEP_EXPORT_PLAN.md) |
+| 2 | First printed-part fit | A physical fit claim for one named board/printer/profile | Print + measure; validation notes |
+| 3 | Automatic board detection from an image | Outline/hole candidates inferred (as `inferred`, user-confirmed) | Image-analysis boundary decision; [plan](plans/IMAGE_CALIBRATION_PLAN.md) |
+| 4 | Camera capture + skew-aware calibration | ADR 0008 accepted or narrowed; second skew line + camera | [plan](plans/IMAGE_CALIBRATION_PLAN.md) |
 | 5 | Test / a11y / CI system | Test matrix, keyboard-journey + contrast conformance, CI wired | [plan](plans/TESTING_A11Y_CI_PLAN.md) |
-| 6 | Modular mounting direction decision | Decide whether the first slice includes a standard attachment interface | Owner ruling, ADR, or spike plan |
-| 7 | Physical-validation plan | First board, printer/material profile, and fit checks named | Validation plan document or ADR |
+| 6 | Exact analytic B-rep (optional) | If faceted STEP proves insufficient downstream, OCCT-WASM behind the adapter | Analytic STEP evidence; ADR 0005 revisit |
+| 7 | Modular mounting direction decision | Decide whether the first slice includes a standard attachment interface | Owner ruling, ADR, or spike plan |
 
-## Known Shell Limitations (for the reviewer)
+**Done this sprint (2026-08-19):** real self-contained solid generator (ADR 0005 accepted), real STL + faceted-B-rep STEP export (ADR 0006 accepted, Fusion gate still open), live 3D preview of the actual solid, `.mgproj` save/open (ADR 0007 accepted), working mm/inch display, and undo/redo.
 
-- The 3D bracket, generated dimensions, and exported STEP/STL are illustrative/placeholder — no geometry kernel is wired, so `mockGenerator` reports `exactSolid: false` and export writes a real metadata sidecar plus a labelled placeholder body.
-- The units toggle stores mm/inch on the project but inspector fields still render values in millimetres; full unit-aware display is deferred.
-- Calibration uses fixed default anchors at the sample board's top holes; draggable anchors and a second skew line are planned, not built.
-- Persistence is `localStorage` only; the real `.mgproj` file schema and migrations are planned.
+## Known Limitations (for the reviewer)
+
+- The STEP is a **faceted** B-rep (curved standoff walls are facets, not analytic surfaces), and **Fusion import + printed-part fit are unverified** — no `evidence/fusion-import/` record exists yet. The export UI and sidecar say so.
+- No **automatic board detection**: outline, holes, and keep-outs are drawn/typed by the user against the reference; nothing is inferred from image pixels.
+- Calibration is a single user-placed line (isotropic scale); a second skew line and camera capture are not built.
+- Reference images embed as data-URL `src` inside the `.mgproj` JSON — simple and self-contained, but large photos bloat the file (ADR 0007 open refinement).
+- No CI yet, and the accessibility conformance pass (keyboard-journey + contrast) is not complete.
 
 ## Open Owner Decisions
 
-- Repository license.
-- Geometry kernel.
-- Export format expectations.
-- Project file format and migration policy.
-- Whether image processing is local-only, optional service-assisted, or deferred.
+- Repository license (ADR 0009).
+- Whether image processing is local-only, optional service-assisted, or deferred (ADR 0008) — gates automatic board detection.
 - Whether modular bracket/mounting interfaces are part of the first mount strategy or a second slice.
+- Whether faceted STEP is sufficient downstream, or an exact analytic B-rep kernel (OCCT-WASM) is warranted (ADR 0005 revisit).
+
+_Decided this sprint: geometry kernel (ADR 0005 accepted — self-contained mesh), export format (ADR 0006 accepted — real STL + faceted STEP, Fusion gate open), project file format and migration policy (ADR 0007 accepted — `.mgproj`)._
 
 ## Not Active
 

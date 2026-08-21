@@ -1,9 +1,9 @@
 ---
 title: STEP Export and Fusion Import Gate Plan
 tier: workflow
-status: proposed
-updated: 2026-08-17
-audited: 2026-08-17
+status: living
+updated: 2026-08-21
+audited: 2026-08-21
 related:
   - docs/PROJECT_VISION.md
   - docs/ARCHITECTURE.md
@@ -14,6 +14,8 @@ related:
 
 # STEP Export and Fusion Import Gate Plan
 
+> **Status update (2026-08-21):** The **readiness gate, STL writer, faceted-B-rep STEP writer, and metadata sidecar are Built** and Verified host-level (ADR 0006 Accepted): `src/core/export/{stl,step,exporter}.ts`. STEP is a real AP214 `MANIFOLD_SOLID_BREP` closed-shell solid built from a **single connected manifold body (`bodyCount` is 1** — the plate, standoffs, and tabs are welded into one solid), structurally validated in tests. The STL coordinate writer emits round-trip-safe 9-significant-digit coordinates, and both the sidecar and the export record now carry the **SHA-256 of the exact artifact body** (distinct from the 32-bit internal `meshHash` mesh fingerprint). This satisfies plan Steps 1–5 with the caveat that the geometry path is the self-contained faceted mesh (ADR 0005 Accepted), not an analytic kernel — Steps 2–3 are verified only at the **host/structural** level (internal properties in `step.ts`), NOT against an independent EXPRESS/AP214 kernel. **Step 6 — the Autodesk Fusion import evidence gate — is the open blocker:** no `evidence/fusion-import/` record exists, so no "usable in Fusion" claim is made. The Fusion protocol below is the exact next action.
+
 ## Purpose & Scope
 
 This plan specifies the export pipeline for Board Mount Designer: the readiness gate that
@@ -21,8 +23,10 @@ decides when generated geometry is trustworthy enough to leave the app, STEP (`.
 as the MVP CAD target, STL as a secondary mesh-only artifact, the metadata sidecar JSON schema,
 and the Autodesk Fusion import evidence gate that earns the word "supported" per format.
 
-Status is `proposed`. Nothing here is Built or Verified. No export format is Ratified; `ADR 0006`
-owns that ruling and this document proposes the contract that ratification would confirm. Scope
+Status is `living`: Steps 1–5 (readiness gate, STL, faceted-B-rep STEP, sidecar, artifact hashing)
+are **Built and Verified host-level**, and `ADR 0006` is **Accepted** for the faceted-STEP contract.
+The one open blocker is Step 6, the Autodesk Fusion import evidence gate — until that record exists no
+"usable in Fusion" claim is made. Scope
 maps to Phase 7 of `docs/plans/BOARD_MOUNT_DESIGNER_MVP_PLAN.md` (PR 8) and depends on the geometry
 adapter delivered in Phase 5 (`ADR 0005`). Out of scope: parametric editability inside Fusion,
 general STEP interoperability beyond the named fixture and Fusion version, 3MF, and cloud delivery.
@@ -85,7 +89,7 @@ interface GeneratedSolid {
   handle: KernelSolidRef;            // opaque kernel handle; never serialized as truth
   sourceProjectVersion: string;      // canonical model version this was generated from
   parametersHash: string;            // sha-256 of the canonicalized generation inputs
-  bodyCount: number;                 // distinct solids (plate + standoffs may be fused or separate)
+  bodyCount: number;                 // always 1: plate + standoffs + tabs are welded into one manifold
   boundingBoxMm: { x: number; y: number; z: number };
   warnings: GenerationWarning[];     // carried from generation, e.g. keep-out clip applied
 }
@@ -126,7 +130,7 @@ metadata is impractical). Schema:
   "generator": {
     "name": "board-mount-designer",
     "version": "0.0.0",              // app/generator version string
-    "kernel": "occt-7.8-wasm"        // provenance of the geometry path
+    "kernel": "mesh-solid@1 (self-contained faceted solid)" // provenance of the geometry path
   },
   "units": "mm",                     // always explicit; unknown is never silently mm or zero
   "projectSchemaVersion": "1",       // canonical model schema (ADR 0004 / ADR 0007)
@@ -138,13 +142,14 @@ metadata is impractical). Schema:
     "source": "user-line"
   },
   "boundingDimsMm": { "x": 82.0, "y": 51.0, "z": 12.6 },
-  "bodyCount": 3,
+  "bodyCount": 1,                    // one connected, watertight manifold (plate+standoffs+tabs welded)
+  "artifactSha256": "…",             // SHA-256 of the exact exported body (the file-integrity hash)
   "artifacts": [
     { "file": "board-mount.step", "format": "step", "sha256": "…" },
     { "file": "board-mount.stl",  "format": "stl",  "sha256": "…" }
   ],
   "warnings": [
-    { "code": "keepout.clip", "message": "Standoff 2 trimmed to respect keep-out K1." }
+    { "code": "fabrication.inferred", "message": "Boss diameter, fit clearance are inferred defaults." }
   ],
   "unsupportedClaims": [             // recorded so downstream never over-reads the artifact
     "no-parametric-editability-in-fusion",
@@ -165,15 +170,20 @@ preview/export parity guarantee made machine-checkable.
    links. *Exit Evidence (host-level):* unit tests prove `ready=false` for missing calibration, a
    missing hole diameter, and any error; `ready=true` only when all pass.
 
-2. **STEP writer over the adapter.** Add `export/fusionStep/` STEP writer calling the selected kernel's
-   STEP export (e.g. OCCT `STEPControl_Writer`, AP214, `Interface_Static` unit = MM). Emit bytes, do
-   not write to disk directly from the writer. *Exit Evidence (generated-geometry-level):* the writer
-   produces a non-empty STEP for the Phase 0 fixture and a re-parse (OCCT `STEPControl_Reader`) yields
-   the same body count and bounding box within tolerance.
+2. **STEP writer over the adapter. (Built — faceted, host-level.)** The shipped writer (`step.ts`)
+   serialises the mesh solid to an AP214 `MANIFOLD_SOLID_BREP` closed shell in millimetres — a FACETED
+   B-rep (curved standoff walls and bores are facets, not analytic surfaces), since the geometry path
+   is the self-contained mesh, not OCCT. *Exit Evidence (host/structural level, Built):* the emitted
+   STEP is validated in tests against its OWN internal properties — a reference-complete entity graph,
+   one closed shell, and each edge shared by exactly two oppositely-sensed faces. It is **NOT** re-read
+   by an independent EXPRESS/AP214 kernel (no OCCT `STEPControl_Reader` in the build); that independent
+   validation is Deferred with the analytic-kernel path.
 
-3. **Metadata sidecar.** Implement the schema above, compute `sha256` per artifact, assert
-   `parametersHash` parity against `GeneratedSolid`. *Exit Evidence (host-level):* schema round-trips;
-   a deliberately mismatched hash aborts export with `ExportBlockedError`.
+3. **Metadata sidecar. (Built.)** The sidecar (`exporter.ts`) carries the full effective recipe, the
+   generation key (`paramsHash`), the exact mm `geometryRecipe`, the internal `meshHash`, and — new —
+   the **SHA-256 of the exact artifact body** per format. *Exit Evidence (host-level, Built):* the
+   sidecar round-trips and `assembleSolid` rebuilds the identical solid from `geometryRecipe` (verified
+   by matching `meshHash`); a stale/absent generation key blocks export at the readiness gate.
 
 4. **STL secondary writer.** Tessellate the same `GeneratedSolid` (kernel triangulation) and write
    binary STL. Mark it secondary/diagnostic in the sidecar `artifacts` and in the RadioCard UI.
@@ -278,8 +288,9 @@ downstream check exists.
 
 - Which STEP flavor (AP214 vs AP242) — owned by `ADR 0005` (kernel) and confirmed by `ADR 0006`.
 - Whether metadata is sidecar-only or partially embedded in the STEP header — owned by `ADR 0006`.
-- Whether bodies export fused (single) or separate (plate + standoffs) — affects `bodyCount`; owned by
-  `ADR 0005` generation strategy, recorded by `ADR 0006`.
+- ~~Whether bodies export fused (single) or separate (plate + standoffs)~~ — **decided (2026-08-20): fused.**
+  The generator builds one connected, watertight manifold, so `bodyCount` is 1 and the STEP carries a
+  single `MANIFOLD_SOLID_BREP`. Owned by `ADR 0005` generation strategy, recorded by `ADR 0006`.
 - STL inclusion by default vs opt-in — owned by `ADR 0006`.
 - Named Fusion version(s) the gate certifies — recorded in `ADR 0006` claim table as evidence accrues.
 

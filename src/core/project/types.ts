@@ -11,7 +11,7 @@ import type { Point, Rect } from "@/core/geom";
 import type { Unit } from "@/core/units/units";
 import type { Val } from "./value";
 
-export const SCHEMA_VERSION = 1 as const;
+export const SCHEMA_VERSION = 2 as const;
 export const GENERATOR_VERSION = "0.1 draft" as const;
 
 export type ProvenanceState = "inferred" | "measured" | "confirmed";
@@ -72,6 +72,7 @@ export interface BoardOutline {
 }
 
 export type FastenerChoice = "M2" | "M2.5" | "M3" | "M4" | "custom";
+export type FastenerStyle = "heat-set-insert" | "self-tapping" | "through-bolt";
 
 export interface MountingHole {
   id: string;
@@ -79,9 +80,21 @@ export interface MountingHole {
   label: string;
   /** Center in image-pixel space. */
   centerPx: Point;
-  /** Drill/clearance diameter in mm. Unknown blocks generation. */
+  /** The board's drill/clearance diameter in mm (a board measurement). Validated against the
+   *  fastener bore; it no longer directly drives the standoff cut. Unknown blocks generation. */
   diameterMm: Val<number>;
+  /**
+   * The hole OWNS its fastener + install style (reviewer #3): a board may mix hardware, and
+   * these — not any mount-level field — drive the standoff bore via the fastener profile.
+   */
   fastener: FastenerChoice;
+  fastenerStyle: FastenerStyle;
+  /**
+   * Optional per-hole standoff bore override (mm), before the print-tolerance offset. When
+   * unset the bore is the inferred fastener-profile default; a `custom` fastener has no
+   * profile, so it MUST set this or generation blocks (reviewer #3).
+   */
+  boreDiameterMm?: Val<number>;
   /** How the position was obtained. */
   positionSource: "clicked-calibrated" | "typed" | "inferred-pattern";
   /** Provenance state for the whole feature (drives the chip). */
@@ -124,12 +137,23 @@ export interface MountStrategy {
   kind: MountStrategyKind;
   standoffHeightMm: Val<number>;
   baseThicknessMm: Val<number>;
-  fastener: FastenerChoice;
-  fastenerStyle: "heat-set-insert" | "self-tapping" | "through-bolt";
+  /**
+   * Fastener + install style seeded onto NEW holes only (a UI default, reviewer #3). The cut
+   * authority lives per-hole (MountingHole.fastener / .fastenerStyle); these never drive the
+   * bore and are excluded from the generation key.
+   */
+  defaultFastener: FastenerChoice;
+  defaultFastenerStyle: FastenerStyle;
   bossDiameterMm: Val<number>;
   sideTabs: 0 | 2 | 4;
   clearanceMm: Val<number>;
   tolerance: ToleranceProfile;
+  /**
+   * Explicit fit offset (mm) used ONLY when `tolerance === "custom"`. Null until the user
+   * supplies a value: a "custom" profile with no value is not silently treated as 0 — it
+   * fails generation with a diagnosable error (reviewer #6).
+   */
+  customToleranceMm: number | null;
 }
 
 export interface GeneratedDimensions {
@@ -167,10 +191,16 @@ export interface ExportRecord {
   format: ExportFormat;
   fileName: string;
   sizeBytes: number;
+  /** SHA-256 (hex) of the exact exported artifact body — verifies the downloaded bytes. */
+  artifactSha256: string;
   paramsHash: string;
   /** Generation key of the model that was actually downloaded — lets the UI tell
    *  "this project has an export in history" from "the CURRENT model was exported". */
   generationKey: string;
+  /** Origin binding (reviewer #6): the project id + version this artifact was built from, so a
+   *  record is self-describing (id + version + generationKey) even lifted out of the project. */
+  projectId: string;
+  projectVersion: number;
   createdAt: number;
   wroteSidecar: boolean;
 }

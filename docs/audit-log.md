@@ -2,14 +2,45 @@
 title: Audit Log
 tier: record
 status: append-only
-updated: 2026-08-17
-audited: 2026-08-17
+updated: 2026-08-21
+audited: 2026-08-21
 related:
   - docs/AUDIT.md
   - docs/DOC_SPEC.md
 ---
 
 # Audit Log
+
+## 2026-08-21 - Third-review hardening pass (PR #6)
+
+Scope: geometry generation, `.mgproj` import boundary, export honesty, and the geometry/STEP plans.
+
+Commands: `pnpm test` (unit), `pnpm typecheck`, `pnpm build`, `pnpm test:e2e`,
+`python3 tools/doc-audit/doc_audit.py --check`, `python3 -m unittest discover tools/doc-audit/tests`.
+
+Evidence:
+
+- STL coordinates are round-trip-safe (9 significant digits); the emitted STL re-welds and re-audits
+  as a single manifold. Sidecar and export record carry the SHA-256 of the exact artifact body,
+  distinct from the 32-bit internal `meshHash` fingerprint.
+- `.mgproj` import enforces safe-integer versions/counts, in-range timestamps, an aggregate work
+  budget, realistic collection caps, and a File.size pre-check before any read.
+- Generation runs in a Web Worker with a real `AbortSignal` → `terminate()` cancellation.
+- Keep-outs are enforceable constraints with four typed statuses; a keep-out intersecting bracket
+  material blocks export rather than being silently skipped.
+- Coded geometry failures are preserved end-to-end (preview, validation, export blocker, report),
+  never flattened into the generic stale blocker.
+- Custom tolerance is an explicit value (fail-closed when unset); inferred fabrication dimensions are
+  listed and require acknowledgement before export.
+
+Findings:
+
+- ERROR: none.
+- WARN: STEP is a FACETED B-rep validated only at the host/structural level, not against an
+  independent EXPRESS/AP214 kernel; the Autodesk Fusion import evidence gate and printed-part fit
+  remain unproven (ADR 0006).
+- INFO: the exact analytic B-rep kernel (ADR 0005 analytic path) remains Deferred; the shipped
+  generator is the single-manifold mesh path.
 
 ## 2026-08-16 - Foundation baseline
 
@@ -266,3 +297,65 @@ Disposition:
 - No tech debt recorded.
 - No captured INBOX items recorded.
 
+
+## 2026-08-19 - Real solid, exports, 3D, and usability sprint
+
+Scope: real geometry generator, STL + faceted-B-rep STEP export, live 3D preview of the generated solid, `.mgproj` save/open, mm/inch display, undo/redo; ADRs 0005/0006/0007 accepted; README, AGENTS, NEXT, HISTORY updated; regenerated map.
+
+Branch/commit: `claude/sprint-functionality-build-617mjf`; base `main` was `566c190` (merge of PR #5).
+
+Commands:
+
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- 79 host-level unit tests pass, including a per-body manifold audit of the generated solid (each directed edge once, each undirected edge shared by two triangles, Euler V−E+F=2), STL facet-per-triangle + determinism, STEP structural validity (reference-complete graph, one closed shell per body, one ADVANCED_FACE per triangle, every edge shared by exactly two faces with opposite ORIENTED_EDGE sense), 3D projection determinism + culling, undo/redo, `.mgproj` round-trip, and unit formatting.
+- 9 Playwright cases pass headless against a production build; the mount and export views now render the actual generated solid.
+- `tsc -b` typechecks; `vite build` bundles; doc-audit PASS; doc-audit tests pass.
+
+Findings:
+
+- ERROR: none after audit.
+- WARN: the STEP is a faceted B-rep and the Fusion import evidence gate is still open (no `evidence/fusion-import/` record); printed-part fit is unverified; automatic board detection and camera/skew-aware calibration remain unbuilt; no CI yet.
+- INFO: reference images embed as data-URL `src` inside the `.mgproj` JSON (large photos bloat the file — ADR 0007 open refinement); the illustrative mock generator is retained for store-test isolation.
+
+Disposition:
+
+- Geometry kernel (ADR 0005), export format (ADR 0006), and project file schema (ADR 0007) moved from Proposed to Accepted, each with the honest boundary of what remains unproven recorded in-ADR.
+- No tech debt recorded.
+- No captured INBOX items recorded.
+
+## 2026-08-20 - Independent-review response: full-scope pass
+
+Scope: implemented every behavioral blocker from the independent review of the sprint PR (rather than narrowing controls) — single connected watertight manifold with real control semantics, no silently-invented dimensions, artifact-units vs display-units split with a full auditable parameter sidecar, one provenance for preview and metadata, monotonic project-version through undo/redo, and `.mgproj` hardened as an untrusted boundary; ADR 0004 promoted Proposed → Accepted; persistence-plan status contradiction resolved; README, AGENTS, NEXT, HISTORY updated; regenerated map.
+
+Branch/commit: `claude/sprint-functionality-build-617mjf` (this pass: `544ec5f`, `d2a0eef`, `3b29e4a`, `e978197`, `47f6a4d` + docs); base `main` at `84e343a`.
+
+Commands:
+
+- `pnpm typecheck` · `pnpm test` · `pnpm build` · `pnpm test:e2e`
+- `python3 tools/doc-audit/doc_audit.py --write-map`
+- `python3 tools/doc-audit/doc_audit.py --check`
+- `python3 -m unittest discover tools/doc-audit/tests`
+
+Evidence:
+
+- 129 host-level unit tests pass, including an AGGREGATE manifold audit of the whole generated solid (one connected component via union-find, every undirected edge shared by exactly two triangles, every directed edge exactly once → watertight + consistently oriented), `poly2d` (hull/offset/ring-overlap) and `triangulate` (earcut with 0–5 holes) unit suites, exporter geometry-units-vs-display-units and full parameter-snapshot tests, a preview-provenance regression pinning the auto-generate-off edit case (dims track the live build, never the stale record), undo/redo strictly-increasing-version tests, and the malformed-`.mgproj` rejection suite.
+- 9 Playwright cases pass headless against a production build.
+- `tsc -b` typechecks; `vite build` bundles (97 modules); doc-audit PASS; its 10 unit tests pass.
+
+Findings:
+
+- ERROR: none after audit.
+- WARN: the STEP is a faceted B-rep and the Fusion import evidence gate is still open (no `evidence/fusion-import/` record); printed-part fit is unverified; automatic board detection and camera/skew-aware calibration remain unbuilt; no CI yet.
+- INFO: reference images embed as data-URL `src` inside the `.mgproj` JSON (ADR 0007 open refinement); the illustrative mock generator is retained for store-test isolation.
+
+Disposition:
+
+- Canonical semantic document model (ADR 0004) moved Proposed → Accepted; it is the load-bearing source of truth and ADR 0007 no longer depends on a Proposed decision.
+- Persistence plan set to `status: living` with a precise Built-vs-proposed split replacing the earlier "nothing is Built" contradiction.
+- No tech debt recorded.
+- No captured INBOX items recorded.

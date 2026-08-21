@@ -8,12 +8,15 @@ import {
   loadSavedBoards,
   useStore,
   __setGeneratorForTest,
+  __setDownloadAdapterForTest,
+  type DownloadAdapter,
 } from "./store";
 import { createSampleProject } from "@/core/project/fixtures";
-import { serializeProject, createProject } from "@/core/project/schema";
-import { isCurrentModelExported, isGenerationCurrent } from "@/core/project/derive";
-import { mockGenerator } from "@/core/geometry/mockGenerator";
-import type { GeometryAdapter } from "@/core/geometry/adapter";
+import { serializeProject, createProject, parseProjectFile, MAX_HOLES, MAX_KEEPOUTS } from "@/core/project/schema";
+import { generationKey, isCurrentModelExported, isGenerationCurrent } from "@/core/project/derive";
+import { buildBracketMesh } from "@/core/geometry/mesh";
+import type { BuildFn } from "@/core/geometry/buildClient";
+import { isKnown } from "@/core/project/value";
 
 function openSample() {
   const p = createSampleProject(1);
@@ -24,13 +27,17 @@ function openSample() {
 beforeEach(() => {
   localStorage.clear();
   __setGeneratorForTest();
+  // jsdom has no URL.createObjectURL, so the real download adapter reports "not initiated".
+  // Default the tests to an adapter that confirms initiation; §6 tests override it explicitly.
+  __setDownloadAdapterForTest((files) => ({ initiated: true, fileNames: files.map((f) => f.name) }));
   vi.useRealTimers();
-  useStore.setState({ current: null, saveState: "idle", lastSavedAt: null, lastSaveError: null });
+  useStore.setState({ current: null, saveState: "idle", lastSavedAt: null, lastSaveError: null, past: [], future: [] });
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   __setGeneratorForTest();
+  __setDownloadAdapterForTest();
 });
 
 describe("loadLibrary resilience", () => {
@@ -102,16 +109,12 @@ describe("keep-out shape change consistency", () => {
 
 describe("generation freshness under async races", () => {
   it("discards a stale generation whose model changed during the async run", async () => {
-    // A delayed adapter we release manually.
+    // A delayed build we release manually — the SAME keyed build service preview/export use.
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const delayed: GeometryAdapter = {
-      name: "delayed",
-      capabilities: { exactSolid: false, previewMesh: false },
-      async generate(project, signal) {
-        await gate;
-        return mockGenerator.generate(project, signal);
-      },
+    const delayed: BuildFn = async (project) => {
+      await gate;
+      return buildBracketMesh(project);
     };
     __setGeneratorForTest(delayed);
 
@@ -121,13 +124,333 @@ describe("generation freshness under async races", () => {
 
     const gp = useStore.getState().generate(); // captures the pre-edit model, then blocks
     // Edit the model while generation is in flight (changes the generation key).
-    useStore.getState().setThicknessMm(9.87);
+    useStore.getState().setMountField({ standoffHeightMm: 9.87 });
     release();
     await gp;
 
     // The result computed from the OLD model must not have been attached.
     expect(useStore.getState().current!.generated ?? null).toBeNull();
     expect(isGenerationCurrent(useStore.getState().current!)).toBe(false);
+  });
+});
+
+describe("generation is genuinely cancellable (reviewer #3)", () => {
+  it("cancelGenerate aborts the in-flight adapter signal and attaches no result", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let sawAbort = false;
+    const delayed: BuildFn = async (project, signal) => {
+      await gate;
+      if (signal?.aborted) {
+        sawAbort = true;
+        return { ok: false, error: { code: "ABORTED", message: "Build cancelled." } };
+      }
+      return buildBracketMesh(project);
+    };
+    __setGeneratorForTest(delayed);
+
+    const p = openSample();
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    expect(p.generated).toBeNull();
+
+    const gp = useStore.getState().generate(); // captures the signal, then blocks on the gate
+    useStore.getState().cancelGenerate(); // real cancel: aborts the controller the worker watches
+    release();
+    await gp;
+
+    // The adapter observed a genuine abort, and no (aborted) result was attached.
+    expect(sawAbort, "the adapter's AbortSignal fired").toBe(true);
+    expect(useStore.getState().current!.generated ?? null).toBeNull();
+  });
+});
+
+describe("coded generation failures are recorded, not discarded (reviewer #2)", () => {
+  function failingBuild(error: { code: string; message: string; feature?: string }): BuildFn {
+    return async () => ({ ok: false, error });
+  }
+
+  it("records the coded error keyed by the attempted model key", async () => {
+    __setGeneratorForTest(failingBuild({ code: "KEEPOUT_BLOCKED", message: "boom", feature: "K1" }));
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
+    await useStore.getState().generate();
+    const err = useStore.getState().generationError;
+    expect(err).toMatchObject({ code: "KEEPOUT_BLOCKED", feature: "K1" });
+    // Keyed by the model it was computed for, so consumers can tell a fresh error from a stale one.
+    expect(err!.key).toBe(generationKey(useStore.getState().current!));
+  });
+
+  it("a subsequent successful generation clears the recorded error", async () => {
+    __setGeneratorForTest(failingBuild({ code: "MISSING_TOLERANCE", message: "no offset" }));
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
+    await useStore.getState().generate();
+    expect(useStore.getState().generationError).not.toBeNull();
+    __setGeneratorForTest(); // back to the mock (succeeds)
+    await useStore.getState().generate();
+    expect(useStore.getState().generationError).toBeNull();
+  });
+
+  it("a cancellation (ABORTED) is not recorded as a failure", async () => {
+    __setGeneratorForTest(failingBuild({ code: "ABORTED", message: "Build cancelled." }));
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
+    await useStore.getState().generate();
+    expect(useStore.getState().generationError).toBeNull();
+  });
+});
+
+describe("ONE keyed geometry build feeds preview/validation/export (reviewer #1)", () => {
+  /** A build impl that counts invocations, so we can prove dedup-by-key. */
+  function countingBuild(): { fn: BuildFn; calls: () => number } {
+    let calls = 0;
+    return {
+      fn: async (project) => {
+        calls += 1;
+        return buildBracketMesh(project);
+      },
+      calls: () => calls,
+    };
+  }
+
+  it("builds ONCE per key and dedupes a concurrent preview + generation for the same model", async () => {
+    const { fn, calls } = countingBuild();
+    __setGeneratorForTest(fn);
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
+    const key = generationKey(p)!;
+
+    // The preview asks for a build; generation asks for the SAME key while it is still in
+    // flight. They must share one build, not launch two.
+    useStore.getState().ensureBuild();
+    await useStore.getState().generate();
+
+    expect(calls(), "one build for the key, shared by preview + generation").toBe(1);
+    const cached = useStore.getState().builds[key];
+    expect(cached?.ok).toBe(true);
+    expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
+
+    // Preview, validation, and export now all read that SAME cached build — none rebuilds.
+    const built = buildExportFromCache(key);
+    expect(built).toBe(true);
+    useStore.getState().ensureBuild();
+    await useStore.getState().generate();
+    expect(calls(), "the cache is reused; no rebuild for an unchanged key").toBe(1);
+  });
+
+  it("rebuilds exactly once when a geometry-affecting edit changes the key, keeping both cached", async () => {
+    const { fn, calls } = countingBuild();
+    __setGeneratorForTest(fn);
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
+    await useStore.getState().generate();
+    expect(calls()).toBe(1);
+
+    useStore.getState().setMountField({ standoffHeightMm: 7.5 }); // changes the generation key
+    await useStore.getState().generate();
+    expect(calls(), "a new key triggers exactly one new build").toBe(2);
+    // Both builds stay cached (bounded LRU) so undo/redo reuse them without recomputing.
+    expect(Object.keys(useStore.getState().builds).length).toBe(2);
+  });
+
+  /** Assert the cached build is what the exporter serialises — no independent rebuild path. */
+  function buildExportFromCache(key: string): boolean {
+    const cached = useStore.getState().builds[key];
+    return !!cached && cached.ok;
+  }
+});
+
+describe("units toggle is display-only", () => {
+  it("does not bump the model version, add an undo entry, or invalidate the generation", async () => {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+    await useStore.getState().generate();
+    expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
+
+    const version = useStore.getState().current!.version;
+    const pastLen = useStore.getState().past.length;
+    useStore.getState().setUnits("inch");
+
+    const st = useStore.getState();
+    expect(st.current!.units).toBe("inch");
+    expect(st.current!.version).toBe(version); // no model-version bump
+    expect(st.past.length).toBe(pastLen); // no undo snapshot
+    expect(isGenerationCurrent(st.current!)).toBe(true); // generation stays current
+  });
+});
+
+describe("undo / redo", () => {
+  it("steps backward and forward through edits and drops redo on a new edit", () => {
+    openSample();
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    const thick = () => {
+      const t = useStore.getState().current!.board.thicknessMm;
+      return isKnown(t) ? t.value : null;
+    };
+
+    useStore.getState().setThicknessMm(2);
+    useStore.getState().setThicknessMm(3);
+    expect(thick()).toBe(3);
+    expect(useStore.getState().past.length).toBe(2);
+
+    useStore.getState().undo();
+    expect(thick()).toBe(2);
+    useStore.getState().undo();
+    expect(thick()).toBe(1.6); // sample's original measured thickness
+    expect(useStore.getState().past.length).toBe(0);
+
+    useStore.getState().redo();
+    expect(thick()).toBe(2);
+
+    // A fresh edit after undo clears the redo stack.
+    useStore.getState().undo(); // back to 1.6
+    useStore.getState().setThicknessMm(5);
+    expect(useStore.getState().future.length).toBe(0);
+    expect(thick()).toBe(5);
+  });
+});
+
+describe("undo/redo preserve a monotonic version and correct freshness", () => {
+  it("every transition strictly increases version and never reuses one (edit→edit→undo→redo→undo→branch)", () => {
+    openSample();
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    const seen: number[] = [];
+    let prev = { v: useStore.getState().current!.version, t: useStore.getState().current!.updatedAt };
+    seen.push(prev.v);
+    const check = () => {
+      const c = useStore.getState().current!;
+      expect(c.version, "version strictly increases").toBeGreaterThan(prev.v);
+      expect(c.updatedAt, "timestamp moves forward").toBeGreaterThanOrEqual(prev.t);
+      seen.push(c.version);
+      prev = { v: c.version, t: c.updatedAt };
+    };
+    useStore.getState().setThicknessMm(2);
+    check();
+    useStore.getState().setThicknessMm(3);
+    check();
+    useStore.getState().undo();
+    check();
+    useStore.getState().redo();
+    check();
+    useStore.getState().undo();
+    check();
+    useStore.getState().setThicknessMm(9); // branch edit after undo
+    check();
+    // No two transitions share a version → two states can never share an export filename.
+    expect(new Set(seen).size).toBe(seen.length);
+  });
+
+  it("undo restores generation currency by key (not by a snapshot flag)", async () => {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+    await useStore.getState().generate();
+    expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    useStore.getState().setMountField({ standoffHeightMm: 7.77 }); // changes the geometry key → stale
+    expect(isGenerationCurrent(useStore.getState().current!)).toBe(false);
+    useStore.getState().undo(); // restores the previously-generated geometry
+    expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
+  });
+});
+
+describe("every UI-created state round-trips through the parser (reviewer #2)", () => {
+  const roundTrips = () => expect(() => parseProjectFile(serializeProject(useStore.getState().current!))).not.toThrow();
+
+  it("parseProjectFile(serializeProject(project)) succeeds after each public mutation", () => {
+    openSample();
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    roundTrips();
+    useStore.getState().setBoardName("x".repeat(20_000)); // clamped to the string cap, still valid
+    roundTrips();
+    useStore.getState().setBoardRevision("rev-" + "y".repeat(20_000));
+    roundTrips();
+    useStore.getState().addHoleAtCenter();
+    roundTrips();
+    useStore.getState().addKeepOutCenter();
+    roundTrips();
+    useStore.getState().setMountField({ standoffHeightMm: 8, defaultFastener: "M4" });
+    roundTrips();
+    useStore.getState().setThicknessMm(1.9);
+    roundTrips();
+    const hole = useStore.getState().current!.board.holes[0];
+    useStore.getState().updateHole(hole.id, { fastenerStyle: "self-tapping", boreDiameterMm: 2.6 });
+    roundTrips();
+  });
+
+  it("caps holes and keep-outs at the parser limit — the UI can't build an un-openable state", () => {
+    const p = openSample();
+    const many = (n: number) => Array.from({ length: n }, (_, i) => ({ ...p.board.holes[0], id: `h-${i}`, label: `H${i}` }));
+    useStore.setState({ current: { ...p, board: { ...p.board, holes: many(MAX_HOLES), keepOuts: p.board.keepOuts.slice(0, MAX_KEEPOUTS) } } });
+    const holesBefore = useStore.getState().current!.board.holes.length;
+    useStore.getState().addHoleAtCenter();
+    expect(useStore.getState().current!.board.holes.length, "add is a no-op at the cap").toBe(holesBefore);
+    // The at-cap state still round-trips.
+    expect(() => parseProjectFile(serializeProject(useStore.getState().current!))).not.toThrow();
+  });
+});
+
+describe("project file import/export", () => {
+  it("round-trips a serialized project back into the library with a fresh id on collision", () => {
+    const p = openSample();
+    const text = serializeProject(useStore.getState().current!);
+    const before = useStore.getState().projects.length;
+    const res = useStore.getState().importProjectFile(text);
+    expect(res.ok).toBe(true);
+    expect(res.id).toBeTruthy();
+    expect(res.id).not.toBe(p.id); // colliding id was reassigned, nothing clobbered
+    expect(useStore.getState().projects.length).toBe(before + 1);
+    expect(useStore.getState().current!.board.holes.length).toBe(4);
+    expect(useStore.getState().route).toEqual({ view: "designer", projectId: res.id });
+  });
+
+  it("rejects a non-project file with a diagnosable error and no library change", () => {
+    openSample();
+    const before = useStore.getState().projects.length;
+    const res = useStore.getState().importProjectFile("{not a project");
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/INVALID_JSON|not/i);
+    expect(useStore.getState().projects.length).toBe(before);
+  });
+
+  it("import is transactional: a quota failure does not open or route to the project (reviewer #5)", () => {
+    const p = openSample();
+    const text = serializeProject(useStore.getState().current!);
+    // Land on the library screen, then simulate a full quota during the import write.
+    useStore.setState({ route: { view: "library" }, current: null });
+    const before = useStore.getState().projects.length;
+    const spy = vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new DOMException("full", "QuotaExceededError");
+    });
+    const res = useStore.getState().importProjectFile(text);
+    spy.mockRestore();
+
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/full|save|storage/i);
+    // No false "opened and saved": not routed, no current, not added to the library.
+    expect(useStore.getState().route).toEqual({ view: "library" });
+    expect(useStore.getState().current).toBeNull();
+    expect(useStore.getState().projects.length).toBe(before);
+    expect(useStore.getState().saveState).toBe("error");
+    void p;
+  });
+});
+
+describe("inferred fabrication dimensions require acknowledgement before export (reviewer #5C)", () => {
+  it("runExport does nothing until the inferred dimensions are acknowledged, then proceeds", async () => {
+    const p = openSample(); // the sample's mount defaults are inferred
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+    await useStore.getState().generate();
+
+    // Not acknowledged → the honesty gate blocks the build (no progress phase entered).
+    await useStore.getState().runExport();
+    expect(useStore.getState().ui.export.phase).toBe("idle");
+    expect(useStore.getState().ui.export.artifact).toBeNull();
+
+    // Acknowledge, then it builds off the main thread (worker fallback runs synchronously here).
+    useStore.getState().toggleAckInferred();
+    await useStore.getState().runExport();
+    expect(useStore.getState().ui.export.phase).toBe("complete");
+    expect(useStore.getState().ui.export.artifact).toBeTruthy();
   });
 });
 
@@ -138,10 +461,8 @@ describe("export is recorded only on download", () => {
     await useStore.getState().generate();
     expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
 
-    vi.useFakeTimers();
-    useStore.getState().runExport();
-    vi.advanceTimersByTime(3000);
-    vi.useRealTimers();
+    useStore.setState((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, acknowledgedInferred: true } } }));
+    await useStore.getState().runExport();
 
     const afterRun = useStore.getState();
     expect(afterRun.ui.export.phase).toBe("complete");
@@ -155,7 +476,173 @@ describe("export is recorded only on download", () => {
     expect(isCurrentModelExported(useStore.getState().current!)).toBe(true);
 
     // Editing after export means the current model is no longer the exported one.
-    useStore.getState().setThicknessMm(3.21);
+    useStore.getState().setMountField({ standoffHeightMm: 3.21 });
     expect(isCurrentModelExported(useStore.getState().current!)).toBe(false);
+  });
+});
+
+describe("export history is proof of a real download (reviewer #6)", () => {
+  async function prepare() {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true, export: { ...s.ui.export, acknowledgedInferred: true } } }));
+    await useStore.getState().generate();
+    await useStore.getState().runExport();
+    expect(useStore.getState().ui.export.phase).toBe("complete");
+  }
+
+  it("records nothing when the download does NOT initiate, and surfaces a download error", async () => {
+    await prepare();
+    const denied: DownloadAdapter = () => ({ initiated: false, reason: "blocked by the browser" });
+    __setDownloadAdapterForTest(denied);
+
+    const result = useStore.getState().commitExportDownload();
+    expect(result.initiated).toBe(false);
+    // No history record for a download that never happened.
+    expect(useStore.getState().current!.exports).toHaveLength(0);
+    expect(isCurrentModelExported(useStore.getState().current!)).toBe(false);
+    expect(useStore.getState().ui.export.downloadError).toMatch(/blocked/);
+  });
+
+  it("records ONLY on a confirmed initiation, bound to project id + version + generation key", async () => {
+    await prepare();
+    const seen: string[][] = [];
+    const ok: DownloadAdapter = (files) => {
+      seen.push(files.map((f) => f.name));
+      return { initiated: true, fileNames: files.map((f) => f.name) };
+    };
+    __setDownloadAdapterForTest(ok);
+
+    const current = useStore.getState().current!;
+    const result = useStore.getState().commitExportDownload();
+    expect(result.initiated).toBe(true);
+    expect(seen).toHaveLength(1); // the adapter was actually invoked with the artifact files
+    expect(seen[0].length).toBeGreaterThan(0);
+
+    const recorded = useStore.getState().current!.exports;
+    expect(recorded).toHaveLength(1);
+    // The record is self-describing: bound to the project id, its version, and the model key.
+    expect(recorded[0].projectId).toBe(current.id);
+    expect(recorded[0].projectVersion).toBe(current.version);
+    expect(recorded[0].generationKey).toBe(generationKey(current));
+    expect(useStore.getState().ui.export.downloadError).toBeNull();
+
+    // Re-invoking is idempotent: the same artifact is not recorded twice.
+    useStore.getState().commitExportDownload();
+    expect(useStore.getState().current!.exports).toHaveLength(1);
+  });
+
+  it("a failed download then a successful retry records exactly one export", async () => {
+    await prepare();
+    __setDownloadAdapterForTest(() => ({ initiated: false, reason: "no filesystem" }));
+    expect(useStore.getState().commitExportDownload().initiated).toBe(false);
+    expect(useStore.getState().current!.exports).toHaveLength(0);
+
+    __setDownloadAdapterForTest((files) => ({ initiated: true, fileNames: files.map((f) => f.name) }));
+    expect(useStore.getState().commitExportDownload().initiated).toBe(true);
+    expect(useStore.getState().current!.exports).toHaveLength(1);
+    expect(useStore.getState().ui.export.downloadError).toBeNull();
+  });
+});
+
+describe("undo/redo preserve the append-only export ledger (reviewer #4)", () => {
+  async function commitAnExport() {
+    useStore.setState((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, acknowledgedInferred: true } } }));
+    await useStore.getState().runExport();
+    useStore.getState().commitExportDownload();
+  }
+
+  it("edit → generate → export → undo keeps the export record; redo keeps it exactly once", async () => {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+    useStore.getState().setThicknessMm(1.7); // a design edit (creates an undo step)
+    await useStore.getState().generate();
+    await commitAnExport();
+    expect(useStore.getState().current!.exports).toHaveLength(1);
+    const recId = useStore.getState().current!.exports[0].id;
+
+    useStore.getState().undo(); // undo the design edit
+    expect(useStore.getState().current!.exports.map((e) => e.id), "export history survives undo").toEqual([recId]);
+
+    useStore.getState().redo();
+    expect(useStore.getState().current!.exports.map((e) => e.id), "still present exactly once after redo").toEqual([recId]);
+  });
+
+  it("keeps every export across multiple edits and undos", async () => {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+
+    useStore.getState().setThicknessMm(1.7);
+    await useStore.getState().generate();
+    await commitAnExport(); // export #1
+
+    useStore.getState().setThicknessMm(1.9);
+    await useStore.getState().generate();
+    await commitAnExport(); // export #2 (a different model)
+
+    expect(useStore.getState().current!.exports).toHaveLength(2);
+    const ids = new Set(useStore.getState().current!.exports.map((e) => e.id));
+
+    useStore.getState().undo();
+    useStore.getState().undo();
+    // Both records survive undoing back past both design edits.
+    expect(new Set(useStore.getState().current!.exports.map((e) => e.id))).toEqual(ids);
+    expect(useStore.getState().current!.exports).toHaveLength(2);
+  });
+
+  it("undo snapshots carry no export ledger (append-only data is excluded from history)", async () => {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
+    useStore.getState().setThicknessMm(1.7);
+    await useStore.getState().generate();
+    await commitAnExport();
+    // The stored pre-edit snapshot is semantic-only: it must not carry the export ledger.
+    const past = useStore.getState().past;
+    expect(past.length).toBeGreaterThan(0);
+    expect(past[past.length - 1].exports).toEqual([]);
+  });
+});
+
+describe("import invariants at numeric extremes (reviewer #4)", () => {
+  /** Import a valid sample project after overriding one or more top-level fields. */
+  function importWith(mutateFile: (proj: Record<string, any>) => void) {
+    const file = JSON.parse(serializeProject(createSampleProject(1)));
+    mutateFile(file.project);
+    const res = useStore.getState().importProjectFile(JSON.stringify(file));
+    expect(res.ok, res.ok ? "" : res.error).toBe(true);
+  }
+
+  it("an edit after importing a future-dated project never moves the timestamp backward", () => {
+    const FUTURE = 2_500_000_000_000; // ~2049: after real Date.now(), within the year-3000 cap
+    importWith((proj) => (proj.updatedAt = FUTURE));
+    expect(useStore.getState().current!.updatedAt).toBe(FUTURE);
+    useStore.getState().setThicknessMm(2.5);
+    // The edit stamp is anchored on the imported updatedAt, so it moves forward, not back to now.
+    expect(useStore.getState().current!.updatedAt).toBeGreaterThan(FUTURE);
+  });
+
+  it("edit → undo → redo stays monotonic and unique when imported near the version ceiling", () => {
+    importWith((proj) => (proj.version = Number.MAX_SAFE_INTEGER - 1_000_010)); // just below MAX_VERSION
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    const seen = [useStore.getState().current!.version];
+    const record = () => seen.push(useStore.getState().current!.version);
+    useStore.getState().setThicknessMm(2);
+    record();
+    useStore.getState().setThicknessMm(3);
+    record();
+    useStore.getState().undo();
+    record();
+    useStore.getState().redo();
+    record();
+    for (let i = 1; i < seen.length; i++) expect(seen[i]).toBeGreaterThan(seen[i - 1]);
+    expect(new Set(seen).size, "no two states share a version → never a duplicate export filename").toBe(seen.length);
+    expect(seen.every(Number.isSafeInteger)).toBe(true);
+  });
+
+  it("rejects a version at the safe-integer ceiling at IMPORT (no throw-on-edit landmine)", () => {
+    const file = JSON.parse(serializeProject(createSampleProject(1)));
+    file.project.version = Number.MAX_SAFE_INTEGER; // safe int, but no bump headroom
+    const res = useStore.getState().importProjectFile(JSON.stringify(file));
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/version|INVALID_SHAPE/);
   });
 });

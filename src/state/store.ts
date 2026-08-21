@@ -7,14 +7,15 @@
 import { create } from "zustand";
 import type { Point, Rect } from "@/core/geom";
 import { bbox, normalizeRect } from "@/core/geom";
-import { boardFrame, boardMmToPxPoint, generationKey, isGenerationCurrent } from "@/core/project/derive";
+import { boardFrame, boardMmToPxPoint, generationKey, inferredFabricationDims, isGenerationCurrent } from "@/core/project/derive";
 import { createSeedLibrary } from "@/core/project/fixtures";
-import { createProject, parseProjectFile } from "@/core/project/schema";
+import { createProject, parseProjectFile, projectRoundTrips, serializeProject, MgFileError, MAX_HOLES, MAX_KEEPOUTS, MAX_EXPORTS, MAX_STRING } from "@/core/project/schema";
 import type {
   BoardSide,
   CalibrationSourceKind,
   ExportFormat,
   FastenerChoice,
+  FastenerStyle,
   KeepOut,
   KeepOutShape,
   MountingHole,
@@ -26,17 +27,106 @@ import { assessCalibration } from "@/core/units/units";
 import type { Unit } from "@/core/units/units";
 import type { StepId } from "@/core/validation/validate";
 import { blockingErrors, validateProject } from "@/core/validation/validate";
-import { mockGenerator } from "@/core/geometry/mockGenerator";
-import type { GeometryAdapter } from "@/core/geometry/adapter";
-import { buildExport, type ExportArtifact } from "@/core/export/exporter";
+import { requestBuild, __setBuildForTest, type BuildFn } from "@/core/geometry/buildClient";
+import type { MeshResult } from "@/core/geometry/mesh";
+import { requestExport } from "@/core/export/exportClient";
+import { type ExportArtifact } from "@/core/export/exporter";
+import type { GeneratedModel } from "@/core/project/types";
 import { uid } from "@/lib/id";
 
-// The active geometry adapter. A test seam lets a delayed adapter be injected to
-// exercise generation superseding without touching production behavior.
-let activeGenerator: GeometryAdapter = mockGenerator;
-/** @internal test-only: swap the adapter (pass nothing to reset to the mock). */
-export function __setGeneratorForTest(gen?: GeometryAdapter) {
-  activeGenerator = gen ?? mockGenerator;
+/**
+ * ONE worker-owned geometry build per generation key (reviewer #1). The store drives the build
+ * worker and caches the immutable result here; preview, validation, and export all read this
+ * cache instead of each recomputing the mesh synchronously on the main thread. A small bounded
+ * LRU keeps a few recent keys so undo/redo and quick edits reuse prior builds. Because the key
+ * is a content hash of the geometry-affecting model, a cached result is never stale — it is,
+ * by construction, the build of exactly that model.
+ */
+const BUILD_CACHE_LIMIT = 8;
+/** In-flight builds keyed by generation key; the controller hard-cancels the worker on abort. */
+const buildInflight = new Map<string, { controller: AbortController; promise: Promise<MeshResult> }>();
+/** Wall-clock build time (ms) per key, for the recorded generation's honest duration readout. */
+const buildElapsed = new Map<string, number>();
+
+function nowMs(): number {
+  const g = globalThis as { performance?: { now?: () => number } };
+  return g.performance?.now ? g.performance.now() : Date.now();
+}
+
+function cacheSet(builds: Record<string, MeshResult>, key: string, result: MeshResult): Record<string, MeshResult> {
+  const next: Record<string, MeshResult> = { ...builds, [key]: result };
+  const keys = Object.keys(next);
+  if (keys.length > BUILD_CACHE_LIMIT) delete next[keys[0]]; // evict oldest inserted
+  return next;
+}
+
+/**
+ * @internal test-only: inject a build implementation (pass nothing to reset to the worker).
+ * Swapping the generator invalidates every cached build (they were produced by the old one),
+ * so the cache + in-flight builds are cleared — a later request re-runs against the new impl.
+ */
+export function __setGeneratorForTest(fn?: BuildFn) {
+  __setBuildForTest(fn);
+  buildInflight.forEach((v) => v.controller.abort());
+  buildInflight.clear();
+  buildElapsed.clear();
+  try {
+    useStore.setState({ builds: {} });
+  } catch {
+    /* store not constructed yet */
+  }
+}
+
+/**
+ * Download proof (reviewer #6). Writing a file to disk is a side effect the store cannot verify
+ * itself, so it goes through a typed adapter that REPORTS whether the download initiated. The
+ * export is recorded in history ONLY on a confirmed initiation — history can never claim a
+ * download that never happened — and the adapter is injectable so the ledger logic is testable
+ * without a real browser download.
+ */
+export interface DownloadFile {
+  name: string;
+  text: string;
+  type: string;
+}
+export type DownloadResult = { initiated: true; fileNames: string[] } | { initiated: false; reason: string };
+export type DownloadAdapter = (files: DownloadFile[]) => DownloadResult;
+
+/** The real browser download: a Blob + object URL per file, reporting genuine initiation. */
+const browserDownload: DownloadAdapter = (files) => {
+  if (typeof document === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) {
+    return { initiated: false, reason: "Downloads are unavailable in this environment." };
+  }
+  try {
+    for (const f of files) {
+      const blob = new Blob([f.text], { type: f.type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = f.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    return { initiated: true, fileNames: files.map((f) => f.name) };
+  } catch (e) {
+    return { initiated: false, reason: e instanceof Error ? e.message : "The browser blocked the download." };
+  }
+};
+let downloadAdapter: DownloadAdapter = browserDownload;
+/** @internal test-only: inject a download adapter (pass nothing to reset to the browser one). */
+export function __setDownloadAdapterForTest(fn?: DownloadAdapter) {
+  downloadAdapter = fn ?? browserDownload;
+}
+
+/** The files a prepared artifact writes: the body, plus the sidecar when one was written. */
+function artifactFiles(artifact: ExportArtifact): DownloadFile[] {
+  const files: DownloadFile[] = [{ name: artifact.fileName, text: artifact.body, type: "application/octet-stream" }];
+  if (artifact.sidecar) {
+    files.push({ name: artifact.fileName.replace(/\.(step|stl)$/, ".meta.json"), text: artifact.sidecar, type: "application/json" });
+  }
+  return files;
 }
 
 export type Theme = "light" | "dark";
@@ -56,12 +146,18 @@ export interface ExportUiState {
   open: boolean;
   format: ExportFormat;
   writeSidecar: boolean;
+  /** The user has acknowledged the inferred fabrication dimensions (reviewer #5C). Required
+   *  before export whenever any exported dimension is inferred rather than measured. */
+  acknowledgedInferred: boolean;
   phase: ExportPhase;
   progress: number;
   stage: string;
   artifact: ExportArtifact | null;
   errorCode: string | null;
   errorDetail: string | null;
+  /** Set when a prepared artifact's download did NOT initiate (reviewer #6): the artifact stays
+   *  prepared and NO export is recorded, so history never claims a download that never happened. */
+  downloadError: string | null;
 }
 
 export interface DesignerUi {
@@ -201,12 +297,14 @@ function freshExportUi(): ExportUiState {
     open: false,
     format: "step",
     writeSidecar: true,
+    acknowledgedInferred: false,
     phase: "idle",
     progress: 0,
     stage: "",
     artifact: null,
     errorCode: null,
     errorDetail: null,
+    downloadError: null,
   };
 }
 
@@ -241,8 +339,52 @@ const TOOL_FOR_STEP: Partial<Record<StepId, ToolId>> = {
 };
 
 let exportTimer: ReturnType<typeof setTimeout> | null = null;
-// Monotonic token so a newer generation supersedes an older in-flight one.
-let generationSeq = 0;
+// Cancellation handle + monotonic token for the in-flight EXPORT job. Aborting terminates the
+// export worker mid-serialization (a real hard-cancel); the token discards a superseded job's
+// late result. Geometry-build cancellation is handled separately by `buildInflight` (reviewer #1).
+let exportAbort: AbortController | null = null;
+let exportSeq = 0;
+
+// Strictly-increasing edit timestamp so the revision chronology is always ordered, even for
+// rapid successive transitions (Date.now() can repeat within a millisecond). Anchored on the
+// current project's `updatedAt` too (reviewer #4): after importing a future-dated project, the
+// next edit's timestamp can never precede the imported value.
+let lastStamp = 0;
+function editStamp(anchor = 0): number {
+  lastStamp = Math.max(Date.now(), lastStamp + 1, anchor + 1);
+  return lastStamp;
+}
+/**
+ * Advance the monotonic version counter with an explicit overflow guard (reviewer #4). Beyond
+ * Number.MAX_SAFE_INTEGER `v + 1 === v`, which would stall the counter and let two distinct
+ * states share an export filename. Import validation rejects unsafe versions, so this can only
+ * fire on a genuinely corrupt in-memory state — fail loudly rather than silently duplicate.
+ */
+function bumpVersion(v: number): number {
+  const n = v + 1;
+  if (!Number.isSafeInteger(n) || n <= v) throw new Error("Project version overflow — cannot advance the monotonic version counter.");
+  return n;
+}
+
+/**
+ * An undo/redo snapshot of the EDITABLE semantic state only. `exports` is an append-only
+ * audit ledger, not editable design state, so it is excluded here and re-attached from the
+ * live project on restore (reviewer #4) — undoing a design edit must never delete a
+ * completed export record.
+ */
+function semanticSnapshot(project: Project): Project {
+  return { ...(structuredClone(project) as Project), exports: [] };
+}
+
+/**
+ * Restore a semantic snapshot as a NEW forward transition: keep the live append-only export
+ * ledger, and stamp a strictly-increasing version + timestamp so `version` stays a monotonic
+ * edit counter and two distinct states can never share an export filename. Generation
+ * freshness is recomputed from the restored model's key, never trusted from a stored flag.
+ */
+function restoreSemantic(snap: Project, current: Project): Project {
+  return { ...(structuredClone(snap) as Project), exports: structuredClone(current.exports), version: bumpVersion(current.version), updatedAt: editStamp(current.updatedAt) };
+}
 function stopExportTimer() {
   if (exportTimer) {
     clearTimeout(exportTimer);
@@ -301,6 +443,9 @@ function projectCenterPx(project: Project): Point {
   return { x: w / 2, y: h / 2 };
 }
 
+/** Snapshots of the open project for undo/redo. Reset when a different project opens. */
+const HISTORY_LIMIT = 60;
+
 export interface AppState {
   theme: Theme;
   route: Route;
@@ -308,6 +453,11 @@ export interface AppState {
   current: Project | null;
   ui: DesignerUi;
   savedBoards: SavedBoardDefinition[];
+  /** Past/future project snapshots for undo/redo (current project only). */
+  past: Project[];
+  future: Project[];
+  undo: () => void;
+  redo: () => void;
   /** Explicit persistence state — "saved" only after a confirmed successful write. */
   saveState: SaveState;
   lastSavedAt: number | null;
@@ -350,7 +500,7 @@ export interface AppState {
   addHoleAt: (centerImg: Point) => void;
   addHoleAtCenter: () => void;
   addKeepOutCenter: () => void;
-  updateHole: (id: string, patch: Partial<Pick<MountingHole, "fastener" | "state">> & { diameterMm?: number | null; center?: Point }) => void;
+  updateHole: (id: string, patch: Partial<Pick<MountingHole, "fastener" | "fastenerStyle" | "state">> & { diameterMm?: number | null; boreDiameterMm?: number | null; center?: Point }) => void;
   confirmHole: (id: string) => void;
   deleteHole: (id: string) => void;
   addKeepOutRect: (a: Point, b: Point) => void;
@@ -358,21 +508,48 @@ export interface AppState {
   deleteKeepOut: (id: string) => void;
   setMountField: (patch: Partial<MountPatch>) => void;
 
+  /** Coded failure from the last generation attempt, keyed by the model key it was computed
+   *  for; null when the last attempt succeeded or none has run. A known geometry failure is
+   *  recorded here rather than silently discarded (reviewer #2) — validateProject also surfaces
+   *  the same coded diagnostic deterministically for the preview/export/report. */
+  generationError: { key: string; code: string; message: string; feature?: string } | null;
+
+  /** Worker-owned geometry build cache keyed by generation key (reviewer #1). Preview,
+   *  validation, and export all read the SAME build here rather than recomputing the mesh. */
+  builds: Record<string, MeshResult>;
+
   // generation + export
   generate: () => Promise<void>;
+  /** Request a worker build of the current model into the cache (for preview/export of a draft). */
+  ensureBuild: () => void;
+  /** Hard-cancel any in-flight generation/build (terminates the geometry worker). */
+  cancelGenerate: () => void;
   ensureGenerated: () => void;
   openExport: () => void;
   closeExport: () => void;
   setExportFormat: (f: ExportFormat) => void;
   toggleSidecar: () => void;
+  /** Toggle the user's acknowledgement of inferred fabrication dimensions (reviewer #5C). */
+  toggleAckInferred: () => void;
   runExport: () => void;
   cancelExport: () => void;
   retryExport: () => void;
-  /** Record the export in history — ONLY after the browser download is initiated. */
-  commitExportDownload: () => void;
+  /** Download the prepared artifact and record it in history — the record is written ONLY on a
+   *  confirmed download initiation (reviewer #6). Returns the typed download result. */
+  commitExportDownload: () => DownloadResult;
 
   // persistence
   saveBoardToLibrary: () => PersistResult;
+  /** Serialise and download the open (or given) project as a portable .mgproj file. */
+  downloadProjectFile: (id?: string) => void;
+  /** Parse a .mgproj file's text, add it to the library (fresh id on collision), open it. */
+  importProjectFile: (text: string) => ImportResult;
+}
+
+export interface ImportResult {
+  ok: boolean;
+  error?: string;
+  id?: string;
 }
 
 export interface ReferenceInput {
@@ -390,10 +567,13 @@ export interface MountPatch {
   baseThicknessMm: number | null;
   bossDiameterMm: number | null;
   clearanceMm: number | null;
-  fastener: FastenerChoice;
-  fastenerStyle: Project["mount"]["fastenerStyle"];
+  /** Fastener + install style seeded onto NEW holes (a default, not the cut authority). */
+  defaultFastener: FastenerChoice;
+  defaultFastenerStyle: FastenerStyle;
   sideTabs: 0 | 2 | 4;
   tolerance: Project["mount"]["tolerance"];
+  /** Explicit custom fit offset (mm); consumed only when tolerance is "custom". */
+  customToleranceMm: number | null;
 }
 
 function valFromInput(mm: number | null, prev: Val<number>): Val<number> {
@@ -426,14 +606,52 @@ export const useStore = create<AppState>((set, get) => {
   function mutate(mutator: (p: Project) => void): PersistResult {
     const current = get().current;
     if (!current) return { ok: false, error: "No open project" };
+    const snapshot = semanticSnapshot(current);
     const next = structuredClone(current) as Project;
     mutator(next);
-    next.version += 1;
-    next.updatedAt = Date.now();
+    next.version = bumpVersion(current.version);
+    next.updatedAt = editStamp(current.updatedAt);
     const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
-    const res = commit(projectsNext, { current: next });
+    // Record the pre-edit SEMANTIC snapshot for undo; a fresh edit clears the redo stack.
+    const pastNext = [...get().past, snapshot].slice(-HISTORY_LIMIT);
+    const res = commit(projectsNext, { current: next, past: pastNext, future: [] });
     if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
     return res;
+  }
+
+  /**
+   * Kick (or reuse) ONE off-thread geometry build for `key` and cache the immutable result
+   * (reviewer #1). Deduplicates by key so preview, validation, and generation never race two
+   * builds of the same model; a newer wanted key hard-cancels older in-flight builds
+   * (terminates the worker). Returns the settled result (ABORTED when cancelled). Both the
+   * success and the coded FAILURE are cached so the preview/validation can render the real
+   * reason; only ABORTED is not cached. The key is a content hash, so a cache hit is never stale.
+   */
+  function runBuild(key: string, project: Project): Promise<MeshResult> {
+    const cached = get().builds[key];
+    if (cached) return Promise.resolve(cached);
+    const existing = buildInflight.get(key);
+    if (existing) return existing.promise;
+    // A newer wanted key supersedes older in-flight builds — hard-cancel them.
+    for (const [k, v] of buildInflight) {
+      if (k !== key) {
+        v.controller.abort();
+        buildInflight.delete(k);
+      }
+    }
+    const controller = new AbortController();
+    const started = nowMs();
+    const promise = requestBuild(project, controller.signal).then((result) => {
+      if (buildInflight.get(key)?.controller === controller) buildInflight.delete(key);
+      const aborted = (result.ok === false && result.error.code === "ABORTED") || controller.signal.aborted;
+      if (!aborted) {
+        buildElapsed.set(key, Math.round((nowMs() - started) * 100) / 100);
+        set((s) => ({ builds: cacheSet(s.builds, key, result) }));
+      }
+      return result;
+    });
+    buildInflight.set(key, { controller, promise });
+    return promise;
   }
 
   function nextLabel(prefix: string, existing: { label: string }[]): string {
@@ -457,11 +675,35 @@ export const useStore = create<AppState>((set, get) => {
     current: null,
     ui: freshDesignerUi(createProject()),
     savedBoards,
+    past: [],
+    future: [],
     saveState: "idle",
     lastSavedAt: null,
     lastSaveError: null,
+    generationError: null,
+    builds: {},
     cursor: null,
     setCursor: (p) => set({ cursor: p }),
+
+    // Undo/redo are NEW forward document transitions that restore an earlier SEMANTIC state
+    // (see restoreSemantic): the append-only `exports` ledger is preserved across both, and
+    // `version` stays a strictly-increasing monotonic counter.
+    undo: () => {
+      const { past, future, current, projects } = get();
+      if (past.length === 0 || !current) return;
+      const restored = restoreSemantic(past[past.length - 1], current);
+      const futureNext = [...future, semanticSnapshot(current)].slice(-HISTORY_LIMIT);
+      commit(projects.map((p) => (p.id === restored.id ? restored : p)), { current: restored, past: past.slice(0, -1), future: futureNext });
+      if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
+    },
+    redo: () => {
+      const { past, future, current, projects } = get();
+      if (future.length === 0 || !current) return;
+      const restored = restoreSemantic(future[future.length - 1], current);
+      const pastNext = [...past, semanticSnapshot(current)].slice(-HISTORY_LIMIT);
+      commit(projects.map((p) => (p.id === restored.id ? restored : p)), { current: restored, past: pastNext, future: future.slice(0, -1) });
+      if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
+    },
 
     toggleTheme: () => {
       const t: Theme = get().theme === "dark" ? "light" : "dark";
@@ -482,7 +724,7 @@ export const useStore = create<AppState>((set, get) => {
       const project = get().projects.find((p) => p.id === id);
       if (!project) return;
       stopExportTimer();
-      set({ current: project, route: { view: "designer", projectId: id }, ui: freshDesignerUi(project) });
+      set({ current: project, route: { view: "designer", projectId: id }, ui: freshDesignerUi(project), past: [], future: [] });
       if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
     },
 
@@ -494,6 +736,8 @@ export const useStore = create<AppState>((set, get) => {
         current: project,
         route: { view: "designer", projectId: project.id },
         ui: freshDesignerUi(project),
+        past: [],
+        future: [],
       });
     },
 
@@ -508,9 +752,18 @@ export const useStore = create<AppState>((set, get) => {
     setView3d: (view3d) => set((s) => ({ ui: { ...s.ui, view3d } })),
     toggleAuto: () => set((s) => ({ ui: { ...s.ui, autoGenerate: !s.ui.autoGenerate } })),
 
-    setUnits: (units) => mutate((p) => void (p.units = units)),
-    setBoardName: (name) => mutate((p) => void (p.board.name = name)),
-    setBoardRevision: (rev) => mutate((p) => void (p.board.revision = rev)),
+    setUnits: (units) => {
+      const current = get().current;
+      if (!current || current.units === units) return;
+      // Units are display-only: persist the preference without bumping the model version,
+      // pushing an undo snapshot, or invalidating the generation.
+      const next = { ...current, units };
+      const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
+      commit(projectsNext, { current: next });
+    },
+    // Clamp editable strings to the parser's length bound so a saved project always re-opens.
+    setBoardName: (name) => mutate((p) => void (p.board.name = name.slice(0, MAX_STRING))),
+    setBoardRevision: (rev) => mutate((p) => void (p.board.revision = rev.slice(0, MAX_STRING))),
     setThicknessMm: (mm) => mutate((p) => void (p.board.thicknessMm = valFromInput(mm, p.board.thicknessMm))),
 
     addSampleReference: () =>
@@ -651,6 +904,8 @@ export const useStore = create<AppState>((set, get) => {
       }),
 
     addHoleAt: (centerImg) => {
+      // Never let the UI exceed the parser's cap (reviewer #2) — a saved board must re-open.
+      if ((get().current?.board.holes.length ?? 0) >= MAX_HOLES) return;
       mutate((p) => {
         const label = nextLabel("H", p.board.holes);
         p.board.holes.push({
@@ -658,7 +913,8 @@ export const useStore = create<AppState>((set, get) => {
           label,
           centerPx: centerImg,
           diameterMm: unknownVal<number>(),
-          fastener: "M3",
+          fastener: p.mount.defaultFastener,
+          fastenerStyle: p.mount.defaultFastenerStyle,
           positionSource: p.calibration?.status === "valid" ? "clicked-calibrated" : "typed",
           state: "measured",
         });
@@ -687,7 +943,14 @@ export const useStore = create<AppState>((set, get) => {
         const h = p.board.holes.find((x) => x.id === id);
         if (!h) return;
         if ("diameterMm" in patch) h.diameterMm = valFromInput(patch.diameterMm ?? null, h.diameterMm);
+        if ("boreDiameterMm" in patch) {
+          // Setting a value is a measured override; clearing it (null) reverts the bore to the
+          // fastener-profile default.
+          const v = patch.boreDiameterMm;
+          h.boreDiameterMm = v != null && Number.isFinite(v) && v > 0 ? typeMeasured(v) : undefined;
+        }
         if (patch.fastener) h.fastener = patch.fastener;
+        if (patch.fastenerStyle) h.fastenerStyle = patch.fastenerStyle;
         if (patch.state) h.state = patch.state;
         if (patch.center) {
           h.centerPx = patch.center;
@@ -712,6 +975,7 @@ export const useStore = create<AppState>((set, get) => {
     },
 
     addKeepOutRect: (a, b) => {
+      if ((get().current?.board.keepOuts.length ?? 0) >= MAX_KEEPOUTS) return;
       mutate((p) => {
         p.board.keepOuts.push({
           id: uid("ko"),
@@ -750,10 +1014,14 @@ export const useStore = create<AppState>((set, get) => {
       mutate((p) => {
         const m = p.mount;
         if (patch.kind) m.kind = patch.kind;
-        if (patch.fastener) m.fastener = patch.fastener;
-        if (patch.fastenerStyle) m.fastenerStyle = patch.fastenerStyle;
+        if (patch.defaultFastener) m.defaultFastener = patch.defaultFastener;
+        if (patch.defaultFastenerStyle) m.defaultFastenerStyle = patch.defaultFastenerStyle;
         if (patch.sideTabs !== undefined) m.sideTabs = patch.sideTabs;
         if (patch.tolerance) m.tolerance = patch.tolerance;
+        if ("customToleranceMm" in patch) {
+          const v = patch.customToleranceMm;
+          m.customToleranceMm = v != null && Number.isFinite(v) && v >= 0 ? v : null;
+        }
         if ("standoffHeightMm" in patch) m.standoffHeightMm = valFromInput(patch.standoffHeightMm ?? null, m.standoffHeightMm);
         if ("baseThicknessMm" in patch) m.baseThicknessMm = valFromInput(patch.baseThicknessMm ?? null, m.baseThicknessMm);
         if ("bossDiameterMm" in patch) m.bossDiameterMm = valFromInput(patch.bossDiameterMm ?? null, m.bossDiameterMm);
@@ -761,22 +1029,57 @@ export const useStore = create<AppState>((set, get) => {
       }),
 
     generate: async () => {
-      const current = get().current;
-      if (!current) return;
-      const seq = ++generationSeq;
-      const result = await activeGenerator.generate(current);
-      // Superseded by a newer generation, or the user switched projects → discard.
-      if (seq !== generationSeq) return;
+      const project = get().current;
+      if (!project) return;
+      const key = generationKey(project);
+      if (!key) return; // unresolved model (no calibration/outline) — nothing to build yet
+      // Drive the SAME keyed build service preview/validation use, then RECORD it as the
+      // project's generation. Deduped by key, so a build already kicked for the preview is
+      // reused rather than recomputed (reviewer #1).
+      const result = await runBuild(key, project);
+      // Stale rejection: an edit made during the async build changes the current model's key,
+      // so the result of the OLD model must not become the (new) project's generation.
       const latest = get().current;
-      if (!latest || latest.id !== current.id) return;
-      if (!result.ok) return;
-      // Accept the result ONLY if the current model still hashes to what was generated.
-      // An edit made during the (async) adapter run changes the key → the stale result
-      // is discarded and cannot become the project's generation.
-      if (generationKey(latest) !== result.model.key) return;
-      const next = { ...latest, generated: result.model };
+      if (!latest || latest.id !== project.id || generationKey(latest) !== key) return;
+      if (!result.ok) {
+        // A coded geometry failure is RECORDED, not silently dropped (reviewer #2), keyed by the
+        // model it was computed for. ABORTED is a deliberate cancellation, not a failure.
+        if (result.error.code !== "ABORTED") {
+          set({ generationError: { key, code: result.error.code, message: result.error.message, feature: result.error.feature } });
+        }
+        return;
+      }
+      const model: GeneratedModel = {
+        sourceVersion: latest.version,
+        key,
+        paramsHash: key,
+        dims: result.dims,
+        warnings: result.warnings, // computed from the EFFECTIVE generated geometry
+        createdAt: Date.now(),
+        durationMs: buildElapsed.get(key) ?? null,
+      };
+      const next = { ...latest, generated: model };
       const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
-      commit(projectsNext, { current: next });
+      commit(projectsNext, { current: next, generationError: null });
+    },
+
+    ensureBuild: () => {
+      // Cache a build for the current model WITHOUT recording it as the generation (preview
+      // and validation consume it). Idempotent: a no-op when already built or in flight.
+      const project = get().current;
+      if (!project) return;
+      const key = generationKey(project);
+      if (!key || get().builds[key]) return;
+      void runBuild(key, project);
+    },
+
+    cancelGenerate: () => {
+      // Real cancellation: abort every in-flight build controller → the build client terminates
+      // the worker, stopping the off-thread computation rather than waiting it out (reviewer #1).
+      for (const [k, v] of buildInflight) {
+        v.controller.abort();
+        buildInflight.delete(k);
+      }
     },
 
     ensureGenerated: () => {
@@ -795,42 +1098,55 @@ export const useStore = create<AppState>((set, get) => {
     },
     closeExport: () => {
       stopExportTimer();
+      exportAbort?.abort(); // terminate any in-flight export serialization
+      exportAbort = null;
+      exportSeq += 1;
+      get().cancelGenerate(); // closing the dialog stops any generation it kicked off
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, open: false, phase: "idle", progress: 0 } } }));
     },
     setExportFormat: (format) => set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, format } } })),
     toggleSidecar: () => set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, writeSidecar: !s.ui.export.writeSidecar } } })),
+    toggleAckInferred: () => set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, acknowledgedInferred: !s.ui.export.acknowledgedInferred } } })),
 
     runExport: () => {
       const current = get().current;
       if (!current) return;
+      // Honesty gate (reviewer #5C): never build an artifact carrying inferred fabrication
+      // dimensions the user has not explicitly acknowledged.
+      if (inferredFabricationDims(current).length > 0 && !get().ui.export.acknowledgedInferred) return;
       const projectId = current.id; // finalize must apply to THIS project, not whatever is current later
-      // Honest placeholder stages — no fake kernel boolean work, no fixed hole counts.
-      const stages = ["Validating current generation", "Preparing labelled placeholder artifact"];
-      if (get().ui.export.writeSidecar) stages.push("Preparing metadata sidecar");
-      let i = 0;
+      const options = { format: get().ui.export.format, writeSidecar: get().ui.export.writeSidecar };
+      // Hand the export worker the SAME build the geometry service already produced (reviewer
+      // #1): the serialization + SHA-256 hashing run off the main thread as a real cancellable
+      // job, and progress reflects completed stages, not a synthetic timer.
+      const key = generationKey(current);
+      const cached = key ? get().builds[key] : undefined;
+      const prebuilt = cached && cached.ok ? cached : undefined;
+
       stopExportTimer();
-      set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "progress", progress: 4, stage: stages[0] } } }));
-      const tick = () => {
-        // Abort if the user navigated to a different project mid-export.
+      exportAbort?.abort();
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      exportAbort = controller;
+      const seq = ++exportSeq;
+      set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "progress", progress: 4, stage: "Building solid from the canonical model", artifact: null, errorCode: null, errorDetail: null } } }));
+
+      return requestExport(current, options, {
+        prebuilt,
+        signal: controller?.signal,
+        onProgress: (progress, stage) => {
+          if (seq !== exportSeq) return; // superseded by a newer/cancelled run
+          const active = get().current;
+          if (!active || active.id !== projectId) return;
+          // Only advance a run still showing progress (a cancel/close resets the phase).
+          set((s) => (s.ui.export.phase === "progress" ? { ui: { ...s.ui, export: { ...s.ui.export, progress, stage } } } : {}));
+        },
+      }).then((outcome) => {
+        if (seq !== exportSeq) return; // superseded/cancelled — its UI is already reset
+        if (exportAbort === controller) exportAbort = null;
         const active = get().current;
-        if (!active || active.id !== projectId) {
-          stopExportTimer();
-          return;
-        }
-        i += 1;
-        const progress = Math.min(96, Math.round((i / (stages.length + 1)) * 100));
-        set((s) => ({
-          ui: { ...s.ui, export: { ...s.ui.export, progress, stage: stages[Math.min(i, stages.length - 1)] } },
-        }));
-        if (i < stages.length) {
-          exportTimer = setTimeout(tick, 380);
-          return;
-        }
-        // Finalize: prepare the artifact IN MEMORY only. No ExportRecord is written to
-        // project history until the user actually downloads (see commitExportDownload).
-        const opts = { format: get().ui.export.format, writeSidecar: get().ui.export.writeSidecar };
-        const built = buildExport(active, opts);
-        if (!built.ok) {
+        if (!active || active.id !== projectId) return; // user switched projects mid-export
+        if (outcome.status === "aborted") return;
+        if (outcome.status === "error") {
           set((s) => ({
             ui: {
               ...s.ui,
@@ -838,29 +1154,51 @@ export const useStore = create<AppState>((set, get) => {
                 ...s.ui.export,
                 phase: "failed",
                 errorCode: "EXPORT_NOT_READY",
-                errorDetail: built.readiness.blockers.map((b) => b.title).join(" · ") || "Readiness gate failed.",
+                errorDetail: outcome.readiness.blockers.map((b) => b.title).join(" · ") || "Readiness gate failed.",
               },
             },
           }));
           return;
         }
-        set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "complete", progress: 100, artifact: built.artifact } } }));
-      };
-      exportTimer = setTimeout(tick, 380);
+        // Prepared IN MEMORY only. No ExportRecord is written to project history until the user
+        // actually downloads (see commitExportDownload).
+        set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "complete", progress: 100, artifact: outcome.artifact } } }));
+      });
     },
 
-    commitExportDownload: () => {
+    commitExportDownload: (): DownloadResult => {
       const art = get().ui.export.artifact;
       const current = get().current;
-      if (!art || !current) return;
-      if (current.exports.some((e) => e.id === art.record.id)) return; // already recorded
-      const next = { ...current, exports: [art.record, ...current.exports] };
+      if (!art || !current) return { initiated: false, reason: "No prepared artifact to download." };
+
+      // Attempt the real download FIRST and record ONLY on a confirmed initiation (reviewer #6):
+      // a download that never started must never leave a history record claiming it did.
+      const result = downloadAdapter(artifactFiles(art));
+      if (!result.initiated) {
+        set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, downloadError: result.reason } } }));
+        return result;
+      }
+
+      set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, downloadError: null } } }));
+      if (current.exports.some((e) => e.id === art.record.id)) return result; // already recorded
+      // The record is bound to this project's id + version + generation key (reviewer #6), so
+      // it is self-describing. Deliberate retention policy (reviewer #2): the ledger keeps the
+      // most recent MAX_EXPORTS records so it can never cross the parser cap and make the
+      // project un-openable. Newest first; older records are archived out rather than growing.
+      const next = { ...current, exports: [art.record, ...current.exports].slice(0, MAX_EXPORTS) };
       const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
       commit(projectsNext, { current: next });
+      return result;
     },
 
     cancelExport: () => {
       stopExportTimer();
+      // Real cancellation: terminate the export worker mid-serialization and bump the token so a
+      // late result is discarded, then stop any generation it kicked off.
+      exportAbort?.abort();
+      exportAbort = null;
+      exportSeq += 1;
+      get().cancelGenerate();
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "idle", progress: 0, stage: "" } } }));
     },
     retryExport: () =>
@@ -882,38 +1220,79 @@ export const useStore = create<AppState>((set, get) => {
       set({ savedBoards: boardsNext });
       return res;
     },
+
+    downloadProjectFile: (id) => {
+      const project = id ? get().projects.find((p) => p.id === id) : get().current;
+      if (!project) return;
+      // Never hand the user a file this version cannot re-open (reviewer #2). The mutation
+      // guards keep this from firing in practice; it's the last-line invariant check.
+      const rt = projectRoundTrips(project);
+      if (!rt.ok) {
+        set({ saveState: "error", lastSaveError: `Cannot export project file — it would not re-open (${rt.error}).` });
+        return;
+      }
+      const safe = project.name.replace(/[^a-z0-9-_]+/gi, "-").toLowerCase() || "project";
+      downloadTextFile(`${safe}_v${project.version}.mgproj`, serializeProject(project), "application/json");
+    },
+
+    importProjectFile: (text) => {
+      let project: Project;
+      try {
+        project = parseProjectFile(text).project;
+      } catch (e) {
+        const msg =
+          e instanceof MgFileError
+            ? `${e.code}: ${e.message}`
+            : "This file could not be read as a Model Generator project.";
+        return { ok: false, error: msg };
+      }
+      // Import is always additive: a colliding id gets a fresh one so nothing is clobbered.
+      if (get().projects.some((p) => p.id === project.id)) project = { ...project, id: uid("proj") };
+      const projectsNext = [project, ...get().projects];
+      // Transactional (reviewer #5): persist FIRST, and only open/route to the imported
+      // project when the write succeeds. A quota failure must never leave the user editing an
+      // apparently-imported project that was never made durable — it stays on the library
+      // screen with a visible error instead.
+      const res = persistLibrary(projectsNext);
+      if (!res.ok) {
+        // Do not add the non-durable project to the in-memory list or route to it.
+        set({ saveState: "error", lastSaveError: res.error ?? "Save failed" });
+        return { ok: false, error: res.error ?? "Could not save the imported project — storage may be full.", id: project.id };
+      }
+      set({
+        projects: projectsNext,
+        current: project,
+        route: { view: "designer", projectId: project.id },
+        ui: freshDesignerUi(project),
+        past: [],
+        future: [],
+        saveState: "saved",
+        lastSavedAt: Date.now(),
+        lastSaveError: null,
+      });
+      if (get().ui.autoGenerate) queueMicrotask(() => get().ensureGenerated());
+      return { ok: true, id: project.id };
+    },
   };
 });
+
+/** Trigger a browser download of a text file (Blob + object URL). */
+export function downloadTextFile(name: string, text: string, type = "text/plain") {
+  if (typeof document === "undefined") return;
+  const blob = new Blob([text], { type });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 
 /** Convert a board-mm point to image-pixel space using the current project frame. */
 export function boardMmToImage(project: Project, mm: Point): Point | null {
   const frame = boardFrame(project);
   if (!frame) return null;
   return boardMmToPxPoint(mm, frame);
-}
-
-/** Trigger a browser download of an export artifact (real for the sidecar). */
-export function downloadArtifact(artifact: ExportArtifact) {
-  if (typeof document === "undefined") return;
-  const files: Array<{ name: string; text: string; type: string }> = [
-    { name: artifact.fileName, text: artifact.body, type: "application/octet-stream" },
-  ];
-  if (artifact.sidecar) {
-    files.push({
-      name: artifact.fileName.replace(/\.(step|stl)$/, ".meta.json"),
-      text: artifact.sidecar,
-      type: "application/json",
-    });
-  }
-  for (const f of files) {
-    const blob = new Blob([f.text], { type: f.type });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = f.name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
 }

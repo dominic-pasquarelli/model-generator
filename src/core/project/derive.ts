@@ -6,6 +6,7 @@
  */
 import { bbox, type Point, type Rect } from "@/core/geom";
 import { ACTIVE_ADAPTER_VERSION } from "@/core/geometry/adapter";
+import { fastenerProfile, FASTENER_PROFILES_VERSION } from "@/core/geometry/fasteners";
 import { shortHash } from "@/lib/id";
 import type { MountingHole, Project } from "./types";
 import { isKnown, maybe, type Val } from "./value";
@@ -131,10 +132,15 @@ export function generationParams(project: Project): Record<string, unknown> | nu
       vertices: outline.vertices.map(toMm),
       cornerRadius: numOrNull(outline.cornerRadiusMm),
     },
-    thickness: numOrNull(project.board.thicknessMm),
+    // Board thickness is a board measurement that does NOT enter the bracket solid (the board
+    // sits above the bracket), so it is excluded from the geometry key (reviewer #3).
+    fastenerProfiles: FASTENER_PROFILES_VERSION,
     holes: project.board.holes.map((h) => ({
       d: numOrNull(h.diameterMm),
+      // Per-hole fastener + style + optional bore override drive the standoff bore.
       fastener: h.fastener,
+      style: h.fastenerStyle,
+      bore: numOrNull(h.boreDiameterMm),
       pos: toMm(h.centerPx),
     })),
     keepOuts: project.board.keepOuts.map((k) => ({
@@ -154,12 +160,13 @@ export function generationParams(project: Project): Record<string, unknown> | nu
       kind: m.kind,
       standoff: numOrNull(m.standoffHeightMm),
       base: numOrNull(m.baseThicknessMm),
-      fastener: m.fastener,
-      style: m.fastenerStyle,
       boss: numOrNull(m.bossDiameterMm),
       tabs: m.sideTabs,
       clearance: numOrNull(m.clearanceMm),
       tolerance: m.tolerance,
+      // Only the custom profile consumes this; fold it in so editing the custom offset
+      // invalidates a prior generation (reviewer #6). Presets ignore it (normalised to null).
+      customTolerance: m.tolerance === "custom" ? (m.customToleranceMm ?? null) : null,
     },
   };
 }
@@ -186,6 +193,38 @@ export function isGenerationCurrent(project: Project): boolean {
 export function isCurrentModelExported(project: Project): boolean {
   const key = generationKey(project);
   return key != null && project.exports.some((e) => e.generationKey === key);
+}
+
+/**
+ * Fabrication dimensions the generator will bake into the artifact that are INFERRED defaults
+ * rather than measured/confirmed (reviewer #5C). These are the "guessed" values the export
+ * honesty policy lists and makes the user acknowledge before download. Unknown values are NOT
+ * here — they block generation entirely and can never reach an export.
+ */
+export function inferredFabricationDims(project: Project): { label: string; valueMm: number }[] {
+  const out: { label: string; valueMm: number }[] = [];
+  const add = (label: string, v: Val<number>) => {
+    if (isKnown(v) && v.source === "inferred") out.push({ label, valueMm: v.value });
+  };
+  const m = project.mount;
+  add("Standoff height", m.standoffHeightMm);
+  add("Base thickness", m.baseThicknessMm);
+  add("Boss diameter", m.bossDiameterMm);
+  add("Fit clearance", m.clearanceMm);
+  if (project.board.outline) add("Corner radius", project.board.outline.cornerRadiusMm);
+  // Standoff bores taken from the fastener profile (no per-hole override) are inferred too —
+  // list them deduplicated by (fastener, style) so the acknowledgement covers them (reviewer #3).
+  const seen = new Set<string>();
+  for (const h of project.board.holes) {
+    if (h.boreDiameterMm && isKnown(h.boreDiameterMm)) continue; // an explicit override is not inferred
+    const profile = fastenerProfile(h.fastener, h.fastenerStyle);
+    const key = `${h.fastener}/${h.fastenerStyle}`;
+    if (profile && !seen.has(key)) {
+      seen.add(key);
+      out.push({ label: `${h.fastener} ${h.fastenerStyle} bore`, valueMm: profile.boreDiameterMm });
+    }
+  }
+  return out;
 }
 
 function numOrNull(v: Val<number> | undefined): number | null {

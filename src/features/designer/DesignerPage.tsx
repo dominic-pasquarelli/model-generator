@@ -1,10 +1,11 @@
-import { useMemo } from "react";
+import { useEffect, useMemo } from "react";
 import { Badge } from "@/components/ui/Badge";
 import { Button, IconButton } from "@/components/ui/Button";
 import { Chip } from "@/components/ui/Chip";
 import { SaveStateIndicator, ThemeToggle, TopBar } from "@/components/shell/TopBar";
 import { validateProject } from "@/core/validation/validate";
 import { exportReadiness } from "@/core/validation/validate";
+import { generationKey } from "@/core/project/derive";
 import { useStore } from "@/state/store";
 import { CanvasStage } from "./canvas/CanvasStage";
 import { Inspector } from "./inspector/Inspector";
@@ -17,8 +18,33 @@ export function DesignerPage() {
   const setStep = useStore((s) => s.setStep);
   const goLibrary = useStore((s) => s.goLibrary);
   const openExport = useStore((s) => s.openExport);
+  const downloadProjectFile = useStore((s) => s.downloadProjectFile);
+  const undo = useStore((s) => s.undo);
+  const redo = useStore((s) => s.redo);
+  const canUndo = useStore((s) => s.past.length > 0);
+  const canRedo = useStore((s) => s.future.length > 0);
 
-  const validations = useMemo(() => (project ? validateProject(project) : []), [project]);
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey) || e.key.toLowerCase() !== "z") return;
+      const t = e.target as HTMLElement | null;
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      e.preventDefault();
+      if (e.shiftKey) redo();
+      else undo();
+    };
+    window.addEventListener("keydown", handler);
+    return () => window.removeEventListener("keydown", handler);
+  }, [undo, redo]);
+
+  // The keyed build the store produced off the main thread; validation reads its status to
+  // tell a coded geometry failure from a merely-stale generation without running the kernel
+  // (reviewer #1). `undefined` while a build is in flight → validation reports "stale" until
+  // the real result lands.
+  const buildKey = project ? generationKey(project) : null;
+  const build = useStore((s) => (buildKey ? s.builds[buildKey] : undefined));
+
+  const validations = useMemo(() => (project ? validateProject(project, build) : []), [project, build]);
   const stepStates = useMemo(
     () => (project ? deriveStepStates(project, validations, activeStep) : []),
     [project, validations, activeStep],
@@ -33,9 +59,10 @@ export function DesignerPage() {
     <>
       <SaveStateIndicator />
       <div className="vdiv" />
-      <IconButton icon="undo" label="Undo" disabled />
-      <IconButton icon="redo" label="Redo" disabled />
+      <IconButton icon="undo" label="Undo" disabled={!canUndo} onClick={undo} />
+      <IconButton icon="redo" label="Redo" disabled={!canRedo} onClick={redo} />
       <div className="vdiv" />
+      <IconButton icon="save" label="Download project file (.mgproj)" onClick={() => downloadProjectFile()} />
       <ThemeToggle />
       <Badge>{project.units}</Badge>
       <Button

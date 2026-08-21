@@ -69,7 +69,13 @@ test("export flow reaches the complete state", async ({ page }) => {
   await expect(page.getByText("Readiness")).toBeVisible();
   await shot(page, "08-export-ready");
 
-  await page.getByRole("button", { name: /Export STEP/ }).click();
+  // The sample's mount defaults are inferred, so export is gated until acknowledged.
+  await expect(page.getByText(/Inferred fabrication dimensions \(\d+\)/)).toBeVisible();
+  const exportStep = page.getByRole("button", { name: /Export STEP/ });
+  await expect(exportStep).toBeDisabled();
+  await page.getByRole("checkbox", { name: /inferred defaults/ }).click();
+  await expect(exportStep).toBeEnabled();
+  await exportStep.click();
   // The artifact is prepared in memory; it is not yet recorded as exported.
   await expect(page.getByText("Artifact prepared")).toBeVisible({ timeout: 15_000 });
   await expect(page.getByText(/Prepared in memory/)).toBeVisible();
@@ -82,6 +88,7 @@ test("closing the export dialog without downloading does not claim an export", a
   const exportBtn = page.getByRole("button", { name: "Export", exact: true });
   await expect(exportBtn).toBeEnabled({ timeout: 10_000 });
   await exportBtn.click();
+  await page.getByRole("checkbox", { name: /inferred defaults/ }).click();
   await page.getByRole("button", { name: /Export STEP/ }).click();
   await expect(page.getByText("Artifact prepared")).toBeVisible({ timeout: 15_000 });
 
@@ -167,6 +174,53 @@ test("uploading a PNG persists the reference across a reload", async ({ page }) 
   await expect(page.getByText("board.png")).toBeVisible();
 });
 
+test("uploading an SVG rasterises it and the project round-trips (reviewer #2)", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Add a board reference" })).toBeVisible();
+
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12" fill="red"/></svg>';
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "board.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from(svg),
+  });
+
+  // The SVG is rasterised to its intrinsic size and accepted (not quarantined).
+  await expect(page.getByText("board.svg")).toBeVisible();
+  await expect(page.getByText(/24 × 12 px/)).toBeVisible();
+
+  // Reload: the app CREATED this state, so it must reopen it — a raw SVG data URL would have
+  // been rejected by the parser here. Its presence proves it round-tripped as a raster asset.
+  await page.reload();
+  await page.getByText("untitled-mount").first().click();
+  await expect(page.getByText("board.svg")).toBeVisible();
+});
+
+test("an oversized project file is rejected instantly and the UI stays responsive (reviewer #3)", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+
+  // A 13 MB blob, larger than the 12 MB project-file cap. The File.size pre-check must reject
+  // it WITHOUT reading the bytes into a string, so the tab never freezes on a hostile file.
+  const oversized = Buffer.alloc(13_000_000, 0x20);
+  const start = Date.now();
+  await page.locator('input[accept*=".mgproj"]').setInputFiles({
+    name: "huge.mgproj",
+    mimeType: "application/json",
+    buffer: oversized,
+  });
+
+  // Diagnosable rejection, promptly.
+  await expect(page.getByRole("alert").getByText(/larger than the .* MB limit/)).toBeVisible({ timeout: 5_000 });
+  expect(Date.now() - start).toBeLessThan(5_000);
+
+  // The main thread is still responsive: an unrelated control still works immediately.
+  const toggle = page.getByRole("button", { name: /Switch to (dark|light) theme/ });
+  await toggle.click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", /dark|light/);
+});
+
 test("changing a keep-out's shape keeps its geometry consistent", async ({ page }) => {
   await page.goto("/");
   await page.getByText("cm4-carrier-mount-a").click();
@@ -178,6 +232,7 @@ test("changing a keep-out's shape keeps its geometry consistent", async ({ page 
   await page.getByLabel("Shape").selectOption("circle");
 
   // The editor now reflects a circle (Diameter readout), and export is still reachable
-  // (no structurally-invalid object was produced).
-  await expect(page.getByText("Diameter")).toBeVisible();
+  // (no structurally-invalid object was produced). Match the field label exactly — the
+  // generation-warning text ("…boss diameter, fit clearance…") also contains "diameter".
+  await expect(page.getByText("Diameter", { exact: true })).toBeVisible();
 });

@@ -1,12 +1,13 @@
 import { Button } from "@/components/ui/Button";
 import { Chip, StateChip } from "@/components/ui/Chip";
-import { Field, NumberField, SegmentedControl, SelectField, TextInput } from "@/components/ui/fields";
+import { Field, SegmentedControl, SelectField, TextInput } from "@/components/ui/fields";
 import type { FastenerChoice, KeepOut, MountingHole, Project } from "@/core/project/types";
 import { boardFrame, holeMm, isGenerationCurrent, outlineDims, rectMm } from "@/core/project/derive";
 import { isKnown, maybe } from "@/core/project/value";
-import { fmt } from "@/lib/format";
+import { fmtLen, unitLabel, type Unit } from "@/core/units/units";
 import { boardMmToImage, useStore } from "@/state/store";
 import { InspectorSection, Muted, ObjectRow } from "./parts";
+import { MmField } from "./MmField";
 
 const FASTENERS: { value: FastenerChoice; label: string }[] = [
   { value: "M2", label: "M2" },
@@ -24,8 +25,9 @@ function stateToChip(state: MountingHole["state"], missing: boolean) {
 }
 
 export function ProjectSection({ project }: { project: Project }) {
-  // Units are millimetres only for now: every inspector input and readout means mm.
-  // The inch option is deferred until conversion is wired end-to-end (see NEXT.md).
+  // Units are a DISPLAY concern only — the canonical model stays in millimetres and the
+  // toggle just changes how values are shown and typed across the inspector and canvas.
+  const setUnits = useStore((s) => s.setUnits);
   return (
     <InspectorSection icon="folder" title="Project">
       <div className="fgrid">
@@ -34,10 +36,16 @@ export function ProjectSection({ project }: { project: Project }) {
             <span className="val">{project.name}</span>
           </div>
         </Field>
-        <Field label="Units" help="inch — planned">
-          <div className="control">
-            <span className="val">mm</span>
-          </div>
+        <Field label="Units" help="Display only — the model stays in mm.">
+          <SegmentedControl
+            ariaLabel="Units"
+            value={project.units}
+            options={[
+              { value: "mm", label: "mm" },
+              { value: "inch", label: "inch" },
+            ]}
+            onChange={(u) => setUnits(u as Unit)}
+          />
         </Field>
         <Field label="Schema">
           <div className="control is-select">
@@ -104,15 +112,14 @@ export function BoardSection({ project }: { project: Project }) {
       <div className="fgrid">
         <TextInput span2 label="Board name" value={project.board.name} placeholder="e.g. MG-DEV-01" onCommit={setBoardName} />
         <TextInput label="Revision" value={project.board.revision} placeholder="—" onCommit={setBoardRevision} />
-        <NumberField
+        <MmField
           label={
             <>
               Thickness {!isKnown(t) ? <Chip tone="neutral">unknown</Chip> : null}
             </>
           }
-          value={maybe(t) ?? null}
-          onCommit={setThickness}
-          unit="mm"
+          mm={maybe(t) ?? null}
+          onCommitMm={setThickness}
         />
       </div>
       <div className="fhelp" style={{ marginTop: 6 }}>
@@ -178,7 +185,7 @@ export function OutlineSection({ project }: { project: Project }) {
     >
       {outline ? (
         <Muted>
-          {dims ? `${fmt(dims.widthMm)} × ${fmt(dims.heightMm)} mm · ` : ""}
+          {dims ? `${fmtLen(dims.widthMm, project.units)} × ${fmtLen(dims.heightMm, project.units)} ${unitLabel(project.units)} · ` : ""}
           {outline.vertices.length} corners · closed
         </Muted>
       ) : (
@@ -205,38 +212,56 @@ function HoleEditor({ project, hole }: { project: Project; hole: MountingHole })
   return (
     <InspectorSection title={`Selected — hole ${hole.label}`}>
       <div className="fgrid">
-        <NumberField
+        <MmField
           label="Center X"
-          value={mm.centerMm ? mm.centerMm.x : null}
-          unit="mm"
-          onCommit={(x) => {
+          mm={mm.centerMm ? mm.centerMm.x : null}
+          onCommitMm={(x) => {
             if (x == null || !frame || !mm.centerMm) return;
             const img = boardMmToImage(project, { x, y: mm.centerMm.y });
             if (img) updateHole(hole.id, { center: img });
           }}
         />
-        <NumberField
+        <MmField
           label="Center Y"
-          value={mm.centerMm ? mm.centerMm.y : null}
-          unit="mm"
-          onCommit={(y) => {
+          mm={mm.centerMm ? mm.centerMm.y : null}
+          onCommitMm={(y) => {
             if (y == null || !frame || !mm.centerMm) return;
             const img = boardMmToImage(project, { x: mm.centerMm.x, y });
             if (img) updateHole(hole.id, { center: img });
           }}
         />
-        <NumberField
+        <MmField
           label="Diameter"
-          value={maybe(hole.diameterMm) ?? null}
-          unit="mm"
+          mm={maybe(hole.diameterMm) ?? null}
           invalid={missing}
-          onCommit={(d) => updateHole(hole.id, { diameterMm: d })}
+          onCommitMm={(d) => updateHole(hole.id, { diameterMm: d })}
           help={missing ? "Required to size the standoff and screw." : undefined}
           helpError={missing}
         />
         <Field label="Fastener">
           <SelectField ariaLabel="Fastener" value={hole.fastener} options={FASTENERS} onChange={(f) => updateHole(hole.id, { fastener: f })} />
         </Field>
+        <Field label="Style">
+          <SelectField
+            ariaLabel="Fastener style"
+            value={hole.fastenerStyle}
+            options={[
+              { value: "heat-set-insert", label: "heat-set insert" },
+              { value: "self-tapping", label: "self-tapping" },
+              { value: "through-bolt", label: "through-bolt" },
+            ]}
+            onChange={(s) => updateHole(hole.id, { fastenerStyle: s as typeof hole.fastenerStyle })}
+          />
+        </Field>
+        <MmField
+          span2
+          label="Bore ⌀ override"
+          mm={hole.boreDiameterMm && isKnown(hole.boreDiameterMm) ? hole.boreDiameterMm.value : null}
+          placeholder="fastener-profile default"
+          onCommitMm={(v) => updateHole(hole.id, { boreDiameterMm: v })}
+          help={hole.fastener === "custom" && !(hole.boreDiameterMm && isKnown(hole.boreDiameterMm)) ? "A custom fastener needs an explicit bore — generation is blocked until one is set." : "Leave blank to use the recommended bore for this fastener + style."}
+          helpError={hole.fastener === "custom" && !(hole.boreDiameterMm && isKnown(hole.boreDiameterMm))}
+        />
         <Field span2 label="Position source">
           <div className="control is-select">
             <span className="val">
@@ -312,8 +337,12 @@ export function HolesSection({ project }: { project: Project }) {
                 name={h.label}
                 detail={
                   <>
-                    {mm.centerMm ? `(${fmt(mm.centerMm.x)}, ${fmt(mm.centerMm.y)}) · ` : ""}
-                    {missing ? <span className="miss">⌀ missing</span> : `⌀${dia?.toFixed(2)} · ${h.fastener}`}
+                    {mm.centerMm ? `(${fmtLen(mm.centerMm.x, project.units)}, ${fmtLen(mm.centerMm.y, project.units)}) · ` : ""}
+                    {missing ? (
+                      <span className="miss">⌀ missing</span>
+                    ) : (
+                      `⌀${dia != null ? fmtLen(dia, project.units) : "—"} · ${h.fastener}`
+                    )}
                   </>
                 }
                 right={stateToChip(h.state, missing)}
@@ -328,13 +357,14 @@ export function HolesSection({ project }: { project: Project }) {
 }
 
 function keepOutSizeLabel(project: Project, ko: KeepOut): string {
+  const u = project.units;
   if (ko.shape === "rect" && ko.rectPx) {
     const d = rectMm(project, ko.rectPx);
-    return d ? `${fmt(d.w)} × ${fmt(d.h)}` : "—";
+    return d ? `${fmtLen(d.w, u)} × ${fmtLen(d.h, u)}` : "—";
   }
   if (ko.shape === "circle" && ko.circlePx) {
     const d = rectMm(project, { x: 0, y: 0, w: ko.circlePx.radiusPx * 2, h: 0 });
-    return d ? `⌀ ${fmt(d.w)}` : "—";
+    return d ? `⌀ ${fmtLen(d.w, u)}` : "—";
   }
   if (ko.shape === "polygon" && ko.polygonPx) return `${ko.polygonPx.length} vertices`;
   return "—";
@@ -372,14 +402,13 @@ function KeepOutEditor({ project, ko }: { project: Project; ko: KeepOut }) {
         <Field label={ko.shape === "circle" ? "Diameter" : ko.shape === "polygon" ? "Vertices" : "W × H"}>
           <div className="control">
             <span className="val num">{keepOutSizeLabel(project, ko)}</span>
-            {ko.shape !== "polygon" ? <span className="unit">mm</span> : null}
+            {ko.shape !== "polygon" ? <span className="unit">{unitLabel(project.units)}</span> : null}
           </div>
         </Field>
-        <NumberField
+        <MmField
           label="Clearance height"
-          value={maybe(ko.clearanceHeightMm) ?? null}
-          unit="mm"
-          onCommit={(h) => updateKeepOut(ko.id, { clearanceHeightMm: h })}
+          mm={maybe(ko.clearanceHeightMm) ?? null}
+          onCommitMm={(h) => updateKeepOut(ko.id, { clearanceHeightMm: h })}
         />
         <Field span2 label="Purpose">
           <TextInput ariaLabel="Purpose" value={ko.purpose} onCommit={(purpose) => updateKeepOut(ko.id, { purpose })} />
@@ -439,8 +468,8 @@ export function KeepOutsSection({ project }: { project: Project }) {
                 name={`${k.label} · ${k.purpose}`}
                 detail={
                   <>
-                    {dimMm ? `rect ${fmt(dimMm.w, 1)} × ${fmt(dimMm.h, 1)} · ` : ""}
-                    height {isKnown(k.clearanceHeightMm) ? fmt(k.clearanceHeightMm.value, 1) : "—"} · {k.boardSide}
+                    {dimMm ? `rect ${fmtLen(dimMm.w, project.units)} × ${fmtLen(dimMm.h, project.units)} · ` : ""}
+                    height {isKnown(k.clearanceHeightMm) ? fmtLen(k.clearanceHeightMm.value, project.units) : "—"} · {k.boardSide}
                   </>
                 }
                 right={<StateChip state={k.state === "inferred" ? "inferred" : "measured"} />}
@@ -460,12 +489,11 @@ export function MeasurementsSection({ project }: { project: Project }) {
   return (
     <InspectorSection icon="ruler" title="Measurements">
       <div className="fgrid">
-        <NumberField
+        <MmField
           span2
           label={<>Board thickness {!isKnown(t) ? <Chip tone="neutral">unknown</Chip> : null}</>}
-          value={maybe(t) ?? null}
-          onCommit={setThickness}
-          unit="mm"
+          mm={maybe(t) ?? null}
+          onCommitMm={setThickness}
           help="Values the image cannot safely supply are typed here and travel with the board definition."
         />
       </div>
@@ -493,21 +521,35 @@ export function MountSection({ project }: { project: Project }) {
               onChange={(kind) => setMountField({ kind })}
             />
           </Field>
-          <NumberField label="Standoff height" value={maybe(m.standoffHeightMm) ?? null} unit="mm" onCommit={(v) => setMountField({ standoffHeightMm: v })} />
-          <NumberField label="Base thickness" value={maybe(m.baseThicknessMm) ?? null} unit="mm" onCommit={(v) => setMountField({ baseThicknessMm: v })} />
-          <Field span2 label="Fastener">
+          <MmField label="Standoff height" mm={maybe(m.standoffHeightMm) ?? null} onCommitMm={(v) => setMountField({ standoffHeightMm: v })} />
+          <MmField label="Base thickness" mm={maybe(m.baseThicknessMm) ?? null} onCommitMm={(v) => setMountField({ baseThicknessMm: v })} />
+          <Field label="Default fastener">
             <SelectField
-              ariaLabel="Fastener style"
-              value={m.fastenerStyle}
+              ariaLabel="Default fastener"
+              value={m.defaultFastener}
               options={[
-                { value: "heat-set-insert", label: `${m.fastener} heat-set insert` },
-                { value: "self-tapping", label: `${m.fastener} self-tapping` },
-                { value: "through-bolt", label: `${m.fastener} through-bolt` },
+                { value: "M2", label: "M2" },
+                { value: "M2.5", label: "M2.5" },
+                { value: "M3", label: "M3" },
+                { value: "M4", label: "M4" },
+                { value: "custom", label: "custom" },
               ]}
-              onChange={(fastenerStyle) => setMountField({ fastenerStyle })}
+              onChange={(defaultFastener) => setMountField({ defaultFastener: defaultFastener as typeof m.defaultFastener })}
             />
           </Field>
-          <NumberField label="Boss ⌀" value={maybe(m.bossDiameterMm) ?? null} unit="mm" onCommit={(v) => setMountField({ bossDiameterMm: v })} />
+          <Field label="Default style">
+            <SelectField
+              ariaLabel="Default fastener style"
+              value={m.defaultFastenerStyle}
+              options={[
+                { value: "heat-set-insert", label: "heat-set insert" },
+                { value: "self-tapping", label: "self-tapping" },
+                { value: "through-bolt", label: "through-bolt" },
+              ]}
+              onChange={(defaultFastenerStyle) => setMountField({ defaultFastenerStyle: defaultFastenerStyle as typeof m.defaultFastenerStyle })}
+            />
+          </Field>
+          <MmField label="Boss ⌀" mm={maybe(m.bossDiameterMm) ?? null} onCommitMm={(v) => setMountField({ bossDiameterMm: v })} />
           <Field label="Side tabs">
             <SegmentedControl
               ariaLabel="Side tabs"
@@ -520,7 +562,7 @@ export function MountSection({ project }: { project: Project }) {
               onChange={(v) => setMountField({ sideTabs: Number(v) as 0 | 2 | 4 })}
             />
           </Field>
-          <NumberField label="Clearance" value={maybe(m.clearanceMm) ?? null} unit="mm" onCommit={(v) => setMountField({ clearanceMm: v })} />
+          <MmField label="Clearance" mm={maybe(m.clearanceMm) ?? null} onCommitMm={(v) => setMountField({ clearanceMm: v })} />
           <Field label="Tolerance">
             <SelectField
               ariaLabel="Tolerance"
@@ -534,9 +576,20 @@ export function MountSection({ project }: { project: Project }) {
               onChange={(tolerance) => setMountField({ tolerance })}
             />
           </Field>
+          {m.tolerance === "custom" ? (
+            <MmField
+              label="Custom offset"
+              mm={m.customToleranceMm}
+              onCommitMm={(v) => setMountField({ customToleranceMm: v })}
+              placeholder="required"
+              invalid={m.customToleranceMm == null}
+            />
+          ) : null}
         </div>
         <div className="fhelp" style={{ marginTop: 8 }}>
-          Clearances and tolerances are explicit parameters — never hidden constants.
+          {m.tolerance === "custom" && m.customToleranceMm == null
+            ? "The custom profile needs an explicit fit offset — generation is blocked until one is set."
+            : "Clearances and tolerances are explicit parameters — never hidden constants."}
         </div>
       </InspectorSection>
 

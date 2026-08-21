@@ -6,8 +6,10 @@
  */
 import { bbox, rectIntersectsCircle, circlesOverlap, type Point } from "@/core/geom";
 import type { KeepOut, Project } from "@/core/project/types";
+import type { MeshResult } from "@/core/geometry/mesh";
 import { isGenerationCurrent, outlineDims, standoffSeatRadiusPx } from "@/core/project/derive";
 import { isKnown, type Val } from "@/core/project/value";
+import { fmtLen, unitLabel } from "@/core/units/units";
 
 export type Severity = "error" | "warning" | "info";
 
@@ -67,7 +69,15 @@ function keepOutHitsCircle(k: KeepOut, center: Point, radiusPx: number): boolean
   return false;
 }
 
-export function validateProject(project: Project): Validation[] {
+/**
+ * Semantic validation of the canonical model. Validation is CHEAP and never runs the geometry
+ * kernel (reviewer #1): the only geometry-derived finding — a genuine coded build failure vs a
+ * merely-stale generation — is resolved from the keyed build the store already produced off the
+ * main thread and passes in as `build`. When no build status is available (a caller without the
+ * cache), a generatable-but-not-current model degrades to "stale/not generated" without
+ * building anything here.
+ */
+export function validateProject(project: Project, build?: MeshResult): Validation[] {
   const out: Validation[] = [];
   const { reference, calibration, board } = project;
 
@@ -244,13 +254,29 @@ export function validateProject(project: Project): Validation[] {
       }
     }
     if (outlineBox && keepOutExceeds(k, outlineBox)) {
-      out.push({
-        id: `keepout-past-edge-${k.id}`,
-        severity: "info",
-        title: `${k.label} extends past the board edge`,
-        body: "Intentional for plug or connector access — the mount will keep this approach clear.",
-        relatesTo: { step: "keepouts", keepOutId: k.id },
-      });
+      // Reconcile the copy with the enforced geometry (reviewer #1/#4): a keep-out is only cut
+      // cleanly when it lies WHOLLY inside the plate. A top-side keep-out is inherently clear (the
+      // bracket is on the underside), but a bottom-side one that crosses the plate edge cannot be
+      // cut as a clean interior pocket and BLOCKS generation — so this is a caution, not a
+      // reassurance, for bottom-side keep-outs.
+      out.push(
+        k.boardSide === "bottom"
+          ? {
+              id: `keepout-past-edge-${k.id}`,
+              severity: "warning",
+              title: `${k.label} crosses the board edge`,
+              body: "A bottom-side keep-out that crosses the plate edge can't be cut as a clean interior pocket — generation blocks it. Move it wholly inside or outside the plate footprint.",
+              fix: { label: "Adjust keep-out", target: { step: "keepouts", keepOutId: k.id } },
+              relatesTo: { step: "keepouts", keepOutId: k.id },
+            }
+          : {
+              id: `keepout-past-edge-${k.id}`,
+              severity: "info",
+              title: `${k.label} extends past the board edge`,
+              body: "Top-side clearance above the board — the bracket sits on the underside, so nothing intrudes here.",
+              relatesTo: { step: "keepouts", keepOutId: k.id },
+            },
+      );
     }
   }
 
@@ -281,21 +307,24 @@ export function validateProject(project: Project): Validation[] {
   }
 
   // ---- Thickness ----
+  // Board thickness is a documented board MEASUREMENT (useful for screw length and assembly
+  // planning); the bracket sits under the board, so it does NOT enter the bracket geometry and
+  // never blocks generation (reviewer #3). It is recorded for provenance, not consumed as a cut.
   if (!isKnown(board.thicknessMm)) {
     out.push({
       id: "thickness-unknown",
       severity: "warning",
       title: "Board thickness not measured",
-      body: "Standoff seating and clearance depend on it. Enter the measured board thickness.",
+      body: "Recorded for assembly/screw-length planning; it does not affect the generated bracket. Enter it when known.",
       fix: { label: "Enter thickness", target: { step: "measurements", field: "thicknessMm" } },
       relatesTo: { step: "measurements" },
     });
   } else if (!(board.thicknessMm.value > 0)) {
     out.push({
       id: "thickness-nonpositive",
-      severity: "error",
+      severity: "warning",
       title: "Board thickness must be positive",
-      body: "A zero or negative board thickness is not physical.",
+      body: "A zero or negative board thickness is not physical. It does not block the bracket, but fix the measurement.",
       fix: { label: "Fix thickness", target: { step: "measurements", field: "thicknessMm" } },
       relatesTo: { step: "measurements" },
     });
@@ -306,26 +335,49 @@ export function validateProject(project: Project): Validation[] {
   // recomputed from the model, so a persisted flag can never mark a stale model current.
   const generatable = summarize(out).errors === 0;
   if (generatable && !isGenerationCurrent(project)) {
-    out.push({
-      id: "generation-stale",
-      severity: "error",
-      title: project.generated ? "Generated model is out of date" : "Mount not generated yet",
-      body: project.generated
-        ? "The bracket was generated from an earlier version of the model. Regenerate before exporting."
-        : "Generate the bracket from the current model before exporting.",
-      fix: { label: "Regenerate", target: { step: "mount" } },
-      relatesTo: { step: "mount" },
-    });
+    // Distinguish a genuine CODED failure (e.g. KEEPOUT_BLOCKED, MISSING_TOLERANCE) from a
+    // model that is merely stale or not yet generated (reviewer #2), reading the keyed build
+    // status the store produced off-thread — validation itself never runs the kernel
+    // (reviewer #1). When the build is still in flight or unavailable, we fall through to the
+    // stale/not-generated finding; once the coded failure lands in the cache it surfaces here,
+    // where the preview, the export blocker, and the Copy-report all read.
+    if (build && !build.ok && build.error.code !== "ABORTED") {
+      out.push({
+        id: "generation-failed",
+        severity: "error",
+        title: `Bracket cannot be generated (${build.error.code})`,
+        body: build.error.feature ? `${build.error.message} (${build.error.feature})` : build.error.message,
+        fix: { label: "Fix inputs", target: { step: "mount" } },
+        relatesTo: { step: "mount" },
+      });
+    } else {
+      out.push({
+        id: "generation-stale",
+        severity: "error",
+        title: project.generated ? "Generated model is out of date" : "Mount not generated yet",
+        body: project.generated
+          ? "The bracket was generated from an earlier version of the model. Regenerate before exporting."
+          : "Generate the bracket from the current model before exporting.",
+        fix: { label: "Regenerate", target: { step: "mount" } },
+        relatesTo: { step: "mount" },
+      });
+    }
   }
 
   // ---- Generation warnings ----
-  if (project.generated) {
-    for (const [i, w] of project.generated.warnings.entries()) {
+  // Surface the recorded warnings ONLY when the generation is CURRENT for the present model
+  // (proven by key, not trusted). A stale generation's warnings describe an earlier model, so
+  // echoing them here would misdescribe the current one — the "generation-stale" error already
+  // tells the user to regenerate, and the live preview shows the current model's warnings. Key by
+  // a stable digest of the warning text (not its index), so an edit that reorders/removes warnings
+  // never lets a later warning inherit an earlier one's identity.
+  if (project.generated && isGenerationCurrent(project)) {
+    for (const w of project.generated.warnings) {
       out.push({
-        id: `gen-warn-${i}`,
+        id: `gen-warn-${warningKey(w)}`,
         severity: "warning",
         title: w,
-        body: "From the last generation. Preview reflects it; consider adjusting the semantic model.",
+        body: "From the current generation. Preview reflects it; consider adjusting the semantic model.",
         relatesTo: { step: "mount" },
       });
     }
@@ -349,6 +401,17 @@ export function validateProject(project: Project): Validation[] {
   }
 
   return out;
+}
+
+/** Stable short digest of a warning string, so a validation id names the WARNING, not its list
+ *  position — reordering or removing an earlier warning never reassigns a later one's identity. */
+function warningKey(text: string): string {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < text.length; i++) {
+    h ^= text.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return (h >>> 0).toString(16).padStart(8, "0");
 }
 
 function keepOutExceeds(k: KeepOut, outlineBox: { x: number; y: number; w: number; h: number }): boolean {
@@ -445,8 +508,9 @@ export interface ExportReadiness {
  * outline/holes and a stale/absent generation are themselves blocking errors,
  * `blockers` is never empty while `ready` is false.
  */
-export function exportReadiness(project: Project, items = validateProject(project)): ExportReadiness {
-  const blockers = blockingErrors(items);
+export function exportReadiness(project: Project, items?: Validation[], build?: MeshResult): ExportReadiness {
+  const list = items ?? validateProject(project, build);
+  const blockers = blockingErrors(list);
   const isCalibrated =
     !!project.calibration && project.calibration.status === "valid" && project.calibration.pxPerMm != null;
   const generationCurrent = isGenerationCurrent(project);
@@ -455,16 +519,17 @@ export function exportReadiness(project: Project, items = validateProject(projec
   if (project.board.outline?.confirmed)
     checklist.push(`Outline and ${project.board.holes.length} holes captured`);
   if (isKnown(project.board.thicknessMm) && project.board.thicknessMm.value > 0)
-    checklist.push(`Board thickness measured · ${project.board.thicknessMm.value.toFixed(2)} mm`);
-  if (generationCurrent && project.generated) {
-    const clips = project.generated.warnings.length;
     checklist.push(
-      clips === 0
-        ? "Generated bracket avoids all keep-outs"
-        : `Generated bracket with ${clips} clipped standoff seat${clips === 1 ? "" : "s"} (see warnings)`,
+      `Board thickness measured · ${fmtLen(project.board.thicknessMm.value, project.units)} ${unitLabel(project.units)}`,
     );
+  if (generationCurrent && project.generated) {
+    // These are general generation warnings (e.g. inferred fabrication dimensions), NOT
+    // "clipped standoff seats" — keep-outs are now enforced constraints that either resolve
+    // cleanly or block the build, so the old label misdescribed what the count means.
+    const n = project.generated.warnings.length;
+    checklist.push(n === 0 ? "Generated bracket with no warnings" : `Generated bracket with ${n} warning${n === 1 ? "" : "s"} (see warnings)`);
   }
-  const summary = summarize(items);
+  const summary = summarize(list);
   checklist.push(`${summary.errors} errors · ${summary.warnings} warnings · model v${project.version}`);
   return { ready: blockers.length === 0 && isCalibrated && generationCurrent, blockers, checklist };
 }
