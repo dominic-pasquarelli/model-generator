@@ -463,6 +463,8 @@ export interface MountPatch {
   fastenerStyle: Project["mount"]["fastenerStyle"];
   sideTabs: 0 | 2 | 4;
   tolerance: Project["mount"]["tolerance"];
+  /** Explicit custom fit offset (mm); consumed only when tolerance is "custom". */
+  customToleranceMm: number | null;
 }
 
 function valFromInput(mm: number | null, prev: Val<number>): Val<number> {
@@ -858,6 +860,10 @@ export const useStore = create<AppState>((set, get) => {
         if (patch.fastenerStyle) m.fastenerStyle = patch.fastenerStyle;
         if (patch.sideTabs !== undefined) m.sideTabs = patch.sideTabs;
         if (patch.tolerance) m.tolerance = patch.tolerance;
+        if ("customToleranceMm" in patch) {
+          const v = patch.customToleranceMm;
+          m.customToleranceMm = v != null && Number.isFinite(v) && v >= 0 ? v : null;
+        }
         if ("standoffHeightMm" in patch) m.standoffHeightMm = valFromInput(patch.standoffHeightMm ?? null, m.standoffHeightMm);
         if ("baseThicknessMm" in patch) m.baseThicknessMm = valFromInput(patch.baseThicknessMm ?? null, m.baseThicknessMm);
         if ("bossDiameterMm" in patch) m.bossDiameterMm = valFromInput(patch.bossDiameterMm ?? null, m.bossDiameterMm);

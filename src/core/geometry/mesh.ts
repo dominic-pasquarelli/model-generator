@@ -87,6 +87,9 @@ export interface KeepOutReport {
 }
 
 export interface StandoffReport {
+  /** Stable hole id this standoff was generated from — the join key for downstream reports
+   *  (labels are display text and can collide or be renamed; ids cannot). */
+  id: string;
   label: string;
   centerMm: Point;
   requestedDiameterMm: EffectiveValue | null;
@@ -114,7 +117,11 @@ export interface EffectiveParams {
   segments: number;
   weldToleranceMm: number;
   contactToleranceMm: number;
-  sideTabs: 0 | 2 | 4;
+  /** Side tabs the user REQUESTED (0/2/4). */
+  requestedSideTabs: 0 | 2 | 4;
+  /** Side tabs actually EMITTED — can be fewer than requested when one is skipped as
+   *  unplaceable (reviewer #6). Equal to `tabs.length`; surfaced explicitly for the sidecar. */
+  emittedTabCount: number;
   tabs: TabReport[];
   /** Effective plate outline the solid was built on (board-space mm). */
   plateOutlineMm: Point[];
@@ -184,11 +191,12 @@ export const MAX_DIMENSION_MM = 2000;
  */
 export const MAX_TRIANGLES = 500_000;
 
-const TOLERANCE_OFFSET: Record<Project["mount"]["tolerance"], number> = {
+/** Preset fit offsets (mm). "custom" is deliberately absent — it resolves from the model's
+ *  `customToleranceMm`, and a selected-but-unset custom profile fails closed (reviewer #6). */
+const TOLERANCE_OFFSET: Record<Exclude<Project["mount"]["tolerance"], "custom">, number> = {
   "fdm-0.20": 0.2,
   "fdm-0.15": 0.15,
   "sla-0.05": 0.05,
-  custom: 0,
 };
 
 // ----------------------------------------------------------------------------
@@ -499,7 +507,16 @@ export function buildBracketMesh(project: Project): MeshResult {
   if (base > MAX_DIMENSION_MM || standoffH > MAX_DIMENSION_MM || boss > MAX_DIMENSION_MM || clearance > MAX_DIMENSION_MM)
     return fail("DIMENSIONS_OUT_OF_RANGE", `A fabrication dimension exceeds the ${MAX_DIMENSION_MM} mm envelope this tool supports.`, "mount");
 
-  const tolOffset = TOLERANCE_OFFSET[m.tolerance];
+  let tolOffset: number;
+  if (m.tolerance === "custom") {
+    const custom = m.customToleranceMm;
+    if (custom == null || !Number.isFinite(custom) || custom < 0)
+      return fail("MISSING_TOLERANCE", "The custom tolerance profile is selected but no fit offset is set. Enter a custom offset (mm) or choose a preset profile.", "tolerance");
+    if (custom > MAX_DIMENSION_MM) return fail("DIMENSIONS_OUT_OF_RANGE", `The custom tolerance offset exceeds the ${MAX_DIMENSION_MM} mm envelope.`, "tolerance");
+    tolOffset = custom;
+  } else {
+    tolOffset = TOLERANCE_OFFSET[m.tolerance];
+  }
   const bossR = boss / 2;
   const warnings: string[] = [];
 
@@ -521,7 +538,7 @@ export function buildBracketMesh(project: Project): MeshResult {
         h.label,
       );
     const c = pxPointToBoardMm(h.centerPx, frame);
-    standoffs.push({ label: h.label, centerMm: c, requestedDiameterMm: valOrNull(h.diameterMm, d), bossDiameterMm: boss, boreDiameterMm: boreD, through });
+    standoffs.push({ id: h.id, label: h.label, centerMm: c, requestedDiameterMm: valOrNull(h.diameterMm, d), bossDiameterMm: boss, boreDiameterMm: boreD, through });
     seats.push(c);
   }
 
@@ -705,7 +722,8 @@ export function buildBracketMesh(project: Project): MeshResult {
     segments: SEGMENTS,
     weldToleranceMm: WELD_EPS_MM,
     contactToleranceMm: CONTACT_EPS,
-    sideTabs: m.sideTabs,
+    requestedSideTabs: m.sideTabs,
+    emittedTabCount: tabReports.length,
     tabs: tabReports,
     plateOutlineMm: recipe.plate,
     requestedOutlineMm,

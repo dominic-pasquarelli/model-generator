@@ -541,9 +541,20 @@ export function MountSection({ project }: { project: Project }) {
               onChange={(tolerance) => setMountField({ tolerance })}
             />
           </Field>
+          {m.tolerance === "custom" ? (
+            <MmField
+              label="Custom offset"
+              mm={m.customToleranceMm}
+              onCommitMm={(v) => setMountField({ customToleranceMm: v })}
+              placeholder="required"
+              invalid={m.customToleranceMm == null}
+            />
+          ) : null}
         </div>
         <div className="fhelp" style={{ marginTop: 8 }}>
-          Clearances and tolerances are explicit parameters — never hidden constants.
+          {m.tolerance === "custom" && m.customToleranceMm == null
+            ? "The custom profile needs an explicit fit offset — generation is blocked until one is set."
+            : "Clearances and tolerances are explicit parameters — never hidden constants."}
         </div>
       </InspectorSection>
 

@@ -130,6 +130,12 @@ export interface MountStrategy {
   sideTabs: 0 | 2 | 4;
   clearanceMm: Val<number>;
   tolerance: ToleranceProfile;
+  /**
+   * Explicit fit offset (mm) used ONLY when `tolerance === "custom"`. Null until the user
+   * supplies a value: a "custom" profile with no value is not silently treated as 0 — it
+   * fails generation with a diagnosable error (reviewer #6).
+   */
+  customToleranceMm: number | null;
 }
 
 export interface GeneratedDimensions {

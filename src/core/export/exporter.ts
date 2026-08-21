@@ -58,7 +58,10 @@ export interface ExportParameters {
   minBossWallMm: number;
   weldToleranceMm: number;
   contactToleranceMm: number;
-  sideTabs: 0 | 2 | 4;
+  /** Side tabs requested vs. actually emitted — a skipped-as-unplaceable tab makes these
+   *  differ, and the sidecar shows both rather than implying the request was honoured. */
+  requestedSideTabs: 0 | 2 | 4;
+  emittedTabCount: number;
   tabs: { edgeIndex: number; widthMm: number; depthMm: number; boreCenterMm: { x: number; y: number }; boreRadiusMm: number }[];
   /** Effective plate outline the solid was built on (board-space mm). */
   plateOutlineMm: { x: number; y: number }[];
@@ -70,6 +73,8 @@ export interface ExportParameters {
   bossDiameterMm: ParamDimReport;
   clearanceMm: ParamDimReport;
   standoffs: {
+    /** Stable hole id the standoff was generated from (the report's join key). */
+    id: string;
     label: string;
     centerMm: { x: number; y: number };
     requestedDiameterMm: ParamDimReport["requested"];
@@ -163,7 +168,6 @@ function paramDim(effective: EffectiveValue, requested: Val<number>): ParamDimRe
 /** Build the full auditable parameter snapshot from the effective params + raw inputs. */
 function buildParameters(project: Project, effective: EffectiveParams): ExportParameters {
   const m = project.mount;
-  const holeByLabel = new Map(project.board.holes.map((h) => [h.label, h] as const));
   return {
     strategy: effective.strategy,
     fastenerStyle: effective.fastenerStyle,
@@ -177,7 +181,8 @@ function buildParameters(project: Project, effective: EffectiveParams): ExportPa
     minBossWallMm: MIN_BOSS_WALL_MM,
     weldToleranceMm: effective.weldToleranceMm,
     contactToleranceMm: effective.contactToleranceMm,
-    sideTabs: effective.sideTabs,
+    requestedSideTabs: effective.requestedSideTabs,
+    emittedTabCount: effective.emittedTabCount,
     tabs: effective.tabs.map((t) => ({
       edgeIndex: t.edgeIndex,
       widthMm: t.widthMm,
@@ -192,17 +197,20 @@ function buildParameters(project: Project, effective: EffectiveParams): ExportPa
     standoffHeightMm: paramDim(effective.standoffHeightMm, m.standoffHeightMm),
     bossDiameterMm: paramDim(effective.bossDiameterMm, m.bossDiameterMm),
     clearanceMm: paramDim(effective.clearanceMm, m.clearanceMm),
-    standoffs: effective.standoffs.map((s) => {
-      const h = holeByLabel.get(s.label);
-      return {
-        label: s.label,
-        centerMm: { x: s.centerMm.x, y: s.centerMm.y },
-        requestedDiameterMm: h ? requestedDim(h.diameterMm) : { known: false },
-        bossDiameterMm: s.bossDiameterMm,
-        boreDiameterMm: s.boreDiameterMm,
-        through: s.through,
-      };
-    }),
+    // The requested diameter is carried on the report itself, resolved by POSITION when the
+    // solid was built (reviewer #6) — never re-joined here by the mutable, collision-prone
+    // label. Key the entry by the stable hole id.
+    standoffs: effective.standoffs.map((s) => ({
+      id: s.id,
+      label: s.label,
+      centerMm: { x: s.centerMm.x, y: s.centerMm.y },
+      requestedDiameterMm: s.requestedDiameterMm
+        ? { known: true, valueMm: s.requestedDiameterMm.value, source: s.requestedDiameterMm.source }
+        : { known: false },
+      bossDiameterMm: s.bossDiameterMm,
+      boreDiameterMm: s.boreDiameterMm,
+      through: s.through,
+    })),
   };
 }
 

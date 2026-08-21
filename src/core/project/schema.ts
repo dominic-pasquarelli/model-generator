@@ -70,6 +70,7 @@ export function defaultMount(): MountStrategy {
     sideTabs: 2,
     clearanceMm: inferred(0.3),
     tolerance: "fdm-0.20",
+    customToleranceMm: null,
   };
 }
 
@@ -475,6 +476,10 @@ export function validateProjectShape(project: Record<string, unknown>): void {
   req(isEnum(m.fastener, FASTENERS), "mount.fastener");
   req(isEnum(m.fastenerStyle, FASTENER_STYLES), "mount.fastenerStyle");
   req(isEnum(m.tolerance, TOLERANCES), "mount.tolerance");
+  // Optional so files written before the field existed still open; when present it must be a
+  // non-negative finite number. Its required-ness for a "custom" profile is a generation-time
+  // rule (fail-closed), not a persistence rule.
+  req(m.customToleranceMm === undefined || m.customToleranceMm === null || isNonNeg(m.customToleranceMm), "mount.customToleranceMm");
   req(m.sideTabs === 0 || m.sideTabs === 2 || m.sideTabs === 4, "mount.sideTabs");
   for (const f of ["standoffHeightMm", "baseThicknessMm", "bossDiameterMm", "clearanceMm"]) {
     req(isValNum(m[f]), `mount.${f}`);

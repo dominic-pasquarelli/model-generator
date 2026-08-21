@@ -160,6 +160,9 @@ export function generationParams(project: Project): Record<string, unknown> | nu
       tabs: m.sideTabs,
       clearance: numOrNull(m.clearanceMm),
       tolerance: m.tolerance,
+      // Only the custom profile consumes this; fold it in so editing the custom offset
+      // invalidates a prior generation (reviewer #6). Presets ignore it (normalised to null).
+      customTolerance: m.tolerance === "custom" ? (m.customToleranceMm ?? null) : null,
     },
   };
 }

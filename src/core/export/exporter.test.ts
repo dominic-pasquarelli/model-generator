@@ -3,8 +3,9 @@ import { createSampleProject } from "@/core/project/fixtures";
 import { assembleSolid, buildBracketMesh, hashMesh } from "@/core/geometry/mesh";
 import { generationKey } from "@/core/project/derive";
 import { solidGenerator } from "@/core/geometry/solidGenerator";
+import { defaultMount } from "@/core/project/schema";
 import { measured } from "@/core/project/value";
-import type { Project } from "@/core/project/types";
+import type { MountStrategy, Project } from "@/core/project/types";
 import { meshToStep, type StepMeta } from "./step";
 import { meshToAsciiStl } from "./stl";
 import { buildExport } from "./exporter";
@@ -144,35 +145,58 @@ describe("exact-build sidecar provenance + reconstruction (reviewer #3)", () => 
     expect(meta.warnings).not.toContain("stale warning that must not appear");
   });
 
-  it("every geometry-affecting control changes the recorded mesh hash (or the recorded strategy)", () => {
-    const hashOf = (mut: (p: Project) => void): string => {
-      const p = createSampleProject(1_000_000);
-      mut(p);
-      const r = buildBracketMesh(p);
-      if (!r.ok) throw new Error(`build failed: ${r.error.code}`);
-      return r.meshHash;
-    };
-    const base = hashOf(() => {});
-    const controls: Array<[string, (p: Project) => void]> = [
-      ["fastenerStyle", (p) => (p.mount.fastenerStyle = "through-bolt")],
-      ["tolerance", (p) => (p.mount.tolerance = "sla-0.05")],
-      ["sideTabs", (p) => (p.mount.sideTabs = 4)],
-      ["cornerRadius", (p) => (p.board.outline!.cornerRadiusMm = measured(4))],
-      ["bossDiameter", (p) => (p.mount.bossDiameterMm = measured(8))],
-      ["standoffHeight", (p) => (p.mount.standoffHeightMm = measured(9))],
-      ["baseThickness", (p) => (p.mount.baseThicknessMm = measured(4))],
-      ["clearance", (p) => (p.mount.clearanceMm = measured(0.5))],
-    ];
-    for (const [label, mut] of controls) {
-      expect(hashOf(mut), `${label} must change the solid`).not.toBe(base);
-    }
-    // Strategy is a geometry-affecting control that is explicitly recorded in the snapshot.
-    // For this axis-aligned rectangular board, rect-plate and the offset-outline plate
-    // legitimately coincide, so the honest record is the strategy field, not a hash change.
+});
+
+describe("every semantic mount field is covered by the geometry contract (reviewer #6)", () => {
+  const build = (mut: (p: Project) => void) => {
     const p = createSampleProject(1_000_000);
-    p.mount.kind = "rect-plate";
+    mut(p);
     const r = buildBracketMesh(p);
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.effective.strategy).toBe("rect-plate");
+    if (!r.ok) throw new Error(`build failed: ${r.error.code}`);
+    return { hash: r.meshHash, key: generationKey(p)! };
+  };
+  const baseline = build(() => {});
+
+  // A COMPLETE contract over every MountStrategy field — not a hand-picked subset. Every
+  // field must at least change the generation key (the identity the exporter and staleness
+  // logic depend on); `changesMesh` says whether it must also change the welded mesh. The
+  // completeness guard below fails if a field is added to MountStrategy without a classifier
+  // here, so this table cannot silently go stale.
+  const CONTRACT: Record<keyof MountStrategy, { changesMesh: boolean; mutate: (p: Project) => void }> = {
+    // For the sample's 4 seats the bridge footprint differs from the full-board plate.
+    kind: { changesMesh: true, mutate: (p) => (p.mount.kind = "standoff-bridge") },
+    standoffHeightMm: { changesMesh: true, mutate: (p) => (p.mount.standoffHeightMm = measured(9)) },
+    baseThicknessMm: { changesMesh: true, mutate: (p) => (p.mount.baseThicknessMm = measured(4)) },
+    // The fastener class is recorded in the generation identity but not cut into the solid
+    // (only fastenerStyle drives the bore), so it changes the key but never the mesh.
+    fastener: { changesMesh: false, mutate: (p) => (p.mount.fastener = "M4") },
+    fastenerStyle: { changesMesh: true, mutate: (p) => (p.mount.fastenerStyle = "through-bolt") },
+    bossDiameterMm: { changesMesh: true, mutate: (p) => (p.mount.bossDiameterMm = measured(8)) },
+    sideTabs: { changesMesh: true, mutate: (p) => (p.mount.sideTabs = 4) },
+    clearanceMm: { changesMesh: true, mutate: (p) => (p.mount.clearanceMm = measured(0.5)) },
+    tolerance: { changesMesh: true, mutate: (p) => (p.mount.tolerance = "sla-0.05") },
+    // Only consumed under the custom profile: selecting it with a value differs from the
+    // fdm-0.20 baseline in both the fit offset (mesh) and the recorded identity (key).
+    customToleranceMm: {
+      changesMesh: true,
+      mutate: (p) => {
+        p.mount.tolerance = "custom";
+        p.mount.customToleranceMm = 0.33;
+      },
+    },
+  };
+
+  it("classifies every MountStrategy field (no field silently untested)", () => {
+    expect(Object.keys(CONTRACT).sort()).toEqual(Object.keys(defaultMount()).sort());
   });
+
+  for (const field of Object.keys(CONTRACT) as (keyof MountStrategy)[]) {
+    const { changesMesh, mutate } = CONTRACT[field];
+    it(`${field}: mutation changes the generation key${changesMesh ? " and the mesh hash" : " but not the mesh"}`, () => {
+      const got = build(mutate);
+      expect(got.key, "generation key must change").not.toBe(baseline.key);
+      if (changesMesh) expect(got.hash, "mesh hash must change").not.toBe(baseline.hash);
+      else expect(got.hash, "mesh hash must NOT change (recorded, not cut)").toBe(baseline.hash);
+    });
+  }
 });

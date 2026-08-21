@@ -110,6 +110,7 @@ describe("import boundary rejects malformed .mgproj data (untrusted input)", () 
     ["an unsupported fastener style", (p) => (p.mount.fastenerStyle = "glue"), /fastenerStyle/],
     ["an unsupported tolerance profile", (p) => (p.mount.tolerance = "fdm-9.99"), /tolerance/],
     ["an invalid sideTabs count", (p) => (p.mount.sideTabs = 3), /sideTabs/],
+    ["a non-numeric custom tolerance value", (p) => (p.mount.customToleranceMm = "loose"), /customToleranceMm/],
     ["a mismatched top-level/project schema version", (_p, file) => (file.project.schemaVersion = 2), /SCHEMA_MISMATCH|schema/],
     ["a malformed generated record", (p) => (p.generated = { sourceVersion: 1, key: "k", paramsHash: "h", dims: {}, warnings: [], createdAt: 0, durationMs: null }), /generated/],
     ["a malformed export record", (p) => (p.exports = [{ id: "e" }]), /exports/],

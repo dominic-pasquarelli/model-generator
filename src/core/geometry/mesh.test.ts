@@ -157,6 +157,46 @@ describe("buildBracketMesh — one connected watertight manifold", () => {
     expect(Array.from(a.mesh.indices)).toEqual(Array.from(b.mesh.indices));
     expect(a.meshHash).toBe(b.meshHash);
   });
+
+  // ---- reviewer #6: custom tolerance value, standoff ids, requested-vs-emitted tabs ----
+
+  it("fails closed when the custom tolerance profile is selected but has no value", () => {
+    const p = createSampleProject(1_000_000);
+    p.mount.tolerance = "custom";
+    p.mount.customToleranceMm = null;
+    const r = buildBracketMesh(p);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("MISSING_TOLERANCE");
+  });
+
+  it("uses the explicit custom offset when one is set (no hidden zero)", () => {
+    const p = createSampleProject(1_000_000);
+    p.mount.tolerance = "custom";
+    p.mount.customToleranceMm = 0.4;
+    const r = build(p);
+    expect(r.effective.toleranceOffsetMm).toBe(0.4);
+    // A different custom offset yields a different bore — the value genuinely drives geometry.
+    const q = createSampleProject(1_000_000);
+    q.mount.tolerance = "custom";
+    q.mount.customToleranceMm = 0.1;
+    expect(build(q).effective.standoffs[0].boreDiameterMm).not.toBeCloseTo(r.effective.standoffs[0].boreDiameterMm, 4);
+  });
+
+  it("carries the stable hole id on each standoff (join by id, not label)", () => {
+    const p = createSampleProject(1_000_000);
+    const r = build(p);
+    const holeIds = new Set(p.board.holes.map((h) => h.id));
+    expect(r.effective.standoffs.map((s) => s.id).sort()).toEqual([...holeIds].sort());
+  });
+
+  it("reports requested vs emitted side tabs (emitted equals the tabs actually placed)", () => {
+    const p = createSampleProject(1_000_000);
+    p.mount.sideTabs = 4;
+    const r = build(p);
+    expect(r.effective.requestedSideTabs).toBe(4);
+    expect(r.effective.emittedTabCount).toBe(r.effective.tabs.length);
+    expect(r.effective.emittedTabCount).toBeLessThanOrEqual(r.effective.requestedSideTabs);
+  });
 });
 
 describe("buildBracketMesh — fail-closed hardening (reviewer #1/#2)", () => {
