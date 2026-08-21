@@ -6,6 +6,7 @@
  */
 import { bbox, rectIntersectsCircle, circlesOverlap, type Point } from "@/core/geom";
 import type { KeepOut, Project } from "@/core/project/types";
+import { buildBracketMesh } from "@/core/geometry/mesh";
 import { isGenerationCurrent, outlineDims, standoffSeatRadiusPx } from "@/core/project/derive";
 import { isKnown, type Val } from "@/core/project/value";
 import { fmtLen, unitLabel } from "@/core/units/units";
@@ -307,16 +308,32 @@ export function validateProject(project: Project): Validation[] {
   // recomputed from the model, so a persisted flag can never mark a stale model current.
   const generatable = summarize(out).errors === 0;
   if (generatable && !isGenerationCurrent(project)) {
-    out.push({
-      id: "generation-stale",
-      severity: "error",
-      title: project.generated ? "Generated model is out of date" : "Mount not generated yet",
-      body: project.generated
-        ? "The bracket was generated from an earlier version of the model. Regenerate before exporting."
-        : "Generate the bracket from the current model before exporting.",
-      fix: { label: "Regenerate", target: { step: "mount" } },
-      relatesTo: { step: "mount" },
-    });
+    // Recompute the geometry to tell a genuine CODED failure (e.g. KEEPOUT_BLOCKED,
+    // MISSING_TOLERANCE) apart from a model that is merely stale or not yet generated
+    // (reviewer #2). A known failure must surface its diagnostic here — where the preview,
+    // the export blocker, and the Copy-report all read — never be flattened into "stale".
+    const build = buildBracketMesh(project);
+    if (!build.ok) {
+      out.push({
+        id: "generation-failed",
+        severity: "error",
+        title: `Bracket cannot be generated (${build.error.code})`,
+        body: build.error.feature ? `${build.error.message} (${build.error.feature})` : build.error.message,
+        fix: { label: "Fix inputs", target: { step: "mount" } },
+        relatesTo: { step: "mount" },
+      });
+    } else {
+      out.push({
+        id: "generation-stale",
+        severity: "error",
+        title: project.generated ? "Generated model is out of date" : "Mount not generated yet",
+        body: project.generated
+          ? "The bracket was generated from an earlier version of the model. Regenerate before exporting."
+          : "Generate the bracket from the current model before exporting.",
+        fix: { label: "Regenerate", target: { step: "mount" } },
+        relatesTo: { step: "mount" },
+      });
+    }
   }
 
   // ---- Generation warnings ----

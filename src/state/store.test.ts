@@ -11,7 +11,7 @@ import {
 } from "./store";
 import { createSampleProject } from "@/core/project/fixtures";
 import { serializeProject, createProject } from "@/core/project/schema";
-import { isCurrentModelExported, isGenerationCurrent } from "@/core/project/derive";
+import { generationKey, isCurrentModelExported, isGenerationCurrent } from "@/core/project/derive";
 import { mockGenerator } from "@/core/geometry/mockGenerator";
 import { isKnown } from "@/core/project/value";
 import type { GeometryAdapter } from "@/core/geometry/adapter";
@@ -163,6 +163,48 @@ describe("generation is genuinely cancellable (reviewer #3)", () => {
     // The adapter observed a genuine abort, and no (aborted) result was attached.
     expect(sawAbort, "the adapter's AbortSignal fired").toBe(true);
     expect(useStore.getState().current!.generated ?? null).toBeNull();
+  });
+});
+
+describe("coded generation failures are recorded, not discarded (reviewer #2)", () => {
+  function failingAdapter(error: { code: string; message: string; feature?: string }): GeometryAdapter {
+    return {
+      name: "failing",
+      capabilities: { exactSolid: false, previewMesh: false },
+      async generate() {
+        return { ok: false, error };
+      },
+    };
+  }
+
+  it("records the coded error keyed by the attempted model key", async () => {
+    __setGeneratorForTest(failingAdapter({ code: "KEEPOUT_BLOCKED", message: "boom", feature: "K1" }));
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
+    await useStore.getState().generate();
+    const err = useStore.getState().generationError;
+    expect(err).toMatchObject({ code: "KEEPOUT_BLOCKED", feature: "K1" });
+    // Keyed by the model it was computed for, so consumers can tell a fresh error from a stale one.
+    expect(err!.key).toBe(generationKey(useStore.getState().current!));
+  });
+
+  it("a subsequent successful generation clears the recorded error", async () => {
+    __setGeneratorForTest(failingAdapter({ code: "MISSING_TOLERANCE", message: "no offset" }));
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
+    await useStore.getState().generate();
+    expect(useStore.getState().generationError).not.toBeNull();
+    __setGeneratorForTest(); // back to the mock (succeeds)
+    await useStore.getState().generate();
+    expect(useStore.getState().generationError).toBeNull();
+  });
+
+  it("a cancellation (ABORTED) is not recorded as a failure", async () => {
+    __setGeneratorForTest(failingAdapter({ code: "ABORTED", message: "Generation cancelled." }));
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
+    await useStore.getState().generate();
+    expect(useStore.getState().generationError).toBeNull();
   });
 });
 

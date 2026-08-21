@@ -415,6 +415,12 @@ export interface AppState {
   deleteKeepOut: (id: string) => void;
   setMountField: (patch: Partial<MountPatch>) => void;
 
+  /** Coded failure from the last generation attempt, keyed by the model key it was computed
+   *  for; null when the last attempt succeeded or none has run. A known geometry failure is
+   *  recorded here rather than silently discarded (reviewer #2) — validateProject also surfaces
+   *  the same coded diagnostic deterministically for the preview/export/report. */
+  generationError: { key: string; code: string; message: string; feature?: string } | null;
+
   // generation + export
   generate: () => Promise<void>;
   /** Hard-cancel any in-flight generation (terminates the geometry worker). */
@@ -536,6 +542,7 @@ export const useStore = create<AppState>((set, get) => {
     saveState: "idle",
     lastSavedAt: null,
     lastSaveError: null,
+    generationError: null,
     cursor: null,
     setCursor: (p) => set({ cursor: p }),
 
@@ -885,14 +892,24 @@ export const useStore = create<AppState>((set, get) => {
       if (generationAbort === controller) generationAbort = null;
       const latest = get().current;
       if (!latest || latest.id !== current.id) return;
-      if (!result.ok) return;
+      if (!result.ok) {
+        // A coded geometry failure is RECORDED, not silently dropped (reviewer #2). Keyed by
+        // the model it was computed for and only when that model is still current, so a later
+        // edit's status never shadows it and a stale error is ignored. ABORTED is a deliberate
+        // cancellation, not a failure.
+        const attemptedKey = generationKey(current);
+        if (result.error.code !== "ABORTED" && attemptedKey && generationKey(latest) === attemptedKey) {
+          set({ generationError: { key: attemptedKey, code: result.error.code, message: result.error.message, feature: result.error.feature } });
+        }
+        return;
+      }
       // Accept the result ONLY if the current model still hashes to what was generated.
       // An edit made during the (async) adapter run changes the key → the stale result
       // is discarded and cannot become the project's generation.
       if (generationKey(latest) !== result.model.key) return;
       const next = { ...latest, generated: result.model };
       const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
-      commit(projectsNext, { current: next });
+      commit(projectsNext, { current: next, generationError: null });
     },
 
     cancelGenerate: () => {

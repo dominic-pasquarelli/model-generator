@@ -180,6 +180,27 @@ describe("exportReadiness", () => {
     expect(exportReadiness(p, v).ready).toBe(false);
   });
 
+  it("surfaces a CODED geometry failure as its own blocker, not the generic stale one (reviewer #2)", () => {
+    const p = createSampleProject(1_000_000);
+    // Generatable per input validation, but the geometry build fails closed (custom tolerance
+    // selected with no value). This must recompute and show the code, not "out of date".
+    p.mount.tolerance = "custom";
+    p.mount.customToleranceMm = null;
+    const v = validateProject(p);
+    const failed = v.find((x) => x.id === "generation-failed");
+    expect(failed, "a coded generation-failed blocker is present").toBeTruthy();
+    expect(failed!.title).toMatch(/MISSING_TOLERANCE/);
+    expect(v.some((x) => x.id === "generation-stale")).toBe(false); // not flattened to stale
+    expect(exportReadiness(p, v).ready).toBe(false);
+  });
+
+  it("uses the generic stale blocker only when the geometry genuinely builds", () => {
+    const p = createSampleProject(1_000_000); // valid, builds, but has no current generation
+    const v = validateProject(p);
+    expect(v.some((x) => x.id === "generation-stale")).toBe(true);
+    expect(v.some((x) => x.id === "generation-failed")).toBe(false);
+  });
+
   it("labels generation warnings honestly, never as 'clipped standoff seats' (reviewer #1)", async () => {
     const p = createSampleProject(1_000_000);
     const gen = await mockGenerator.generate(p);

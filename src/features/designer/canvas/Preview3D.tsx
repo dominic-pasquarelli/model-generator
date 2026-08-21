@@ -99,6 +99,9 @@ export function Preview3D({ project }: { project: Project }) {
             padding: 40,
           }}
         >
+          <span className="mono" style={{ color: "#c98b8b" }}>{preview.code}</span>
+          {preview.feature ? ` · ${preview.feature}` : ""}
+          <br />
           {preview.message} Resolve the blocking inputs, then the bracket generates from the canonical model.
         </div>
       )}

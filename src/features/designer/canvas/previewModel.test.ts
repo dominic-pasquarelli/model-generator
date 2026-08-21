@@ -92,4 +92,15 @@ describe("previewModel — preview and metadata share one build (reviewer #5)", 
     expect(preview.ok).toBe(false);
     if (!preview.ok) expect(preview.message.length).toBeGreaterThan(0);
   });
+
+  it("preserves the coded diagnostic on a build failure (reviewer #2)", () => {
+    const p = createSampleProject(1);
+    p.mount.bossDiameterMm = { known: false };
+    const preview = previewModel(p);
+    expect(preview.ok).toBe(false);
+    if (!preview.ok) {
+      expect(preview.code).toBe("MISSING_BOSS");
+      expect(preview.feature).toBeTruthy();
+    }
+  });
 });

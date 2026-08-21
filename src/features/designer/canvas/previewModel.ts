@@ -3,7 +3,7 @@ import { isGenerationCurrent } from "@/core/project/derive";
 import type { GeneratedDimensions, Project } from "@/core/project/types";
 
 export type PreviewModel =
-  | { ok: false; message: string }
+  | { ok: false; message: string; code: string; feature?: string }
   | {
       ok: true;
       mesh: BracketMesh;
@@ -31,7 +31,9 @@ export type PreviewModel =
  */
 export function previewModel(project: Project): PreviewModel {
   const built = buildBracketMesh(project);
-  if (!built.ok) return { ok: false, message: built.error.message };
+  // Preserve the coded diagnostic (reviewer #2) so the preview names the real cause
+  // (e.g. KEEPOUT_BLOCKED, MISSING_TOLERANCE), not a generic "couldn't generate".
+  if (!built.ok) return { ok: false, message: built.error.message, code: built.error.code, feature: built.error.feature };
   const gen = project.generated;
   const current = isGenerationCurrent(project) && gen != null;
   return {
