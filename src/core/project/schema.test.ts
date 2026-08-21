@@ -173,6 +173,7 @@ describe("numeric + structural import invariants (reviewer #4)", () => {
   const cases: Array<[string, (p: Record<string, any>, file: Record<string, any>) => void, RegExp]> = [
     // ---- safe-integer versions/counts ----
     ["a project version at the unsafe-integer ceiling (2^53)", (p) => (p.version = UNSAFE), /version/],
+    ["a project version at the safe-integer ceiling (no bump headroom)", (p) => (p.version = MAX_SAFE), /version/],
     ["a fractional project version", (p) => (p.version = 1.5), /version/],
     ["an unsafe generated sourceVersion", (p) => (p.generated = { ...validGenerated(), sourceVersion: UNSAFE }), /generated/],
     ["a negative generated standoffCount", (p) => (p.generated = { ...validGenerated(), dims: { ...validGenerated().dims, standoffCount: -1 } }), /standoffCount/],
@@ -209,8 +210,8 @@ describe("numeric + structural import invariants (reviewer #4)", () => {
     expect(() => parseProjectFile(file)).toThrow(/SCHEMA_MISMATCH|number/);
   });
 
-  it("accepts a project version just below the safe-integer ceiling", () => {
-    const ok = corruptFile((p) => (p.version = MAX_SAFE - 1));
+  it("accepts a high version that still has bump headroom below the ceiling", () => {
+    const ok = corruptFile((p) => (p.version = MAX_SAFE - 2_000_000)); // below MAX_VERSION
     expect(() => parseProjectFile(ok)).not.toThrow();
   });
 

@@ -39,8 +39,22 @@ const MAX_REF_SRC_BYTES = 12_000_000;
 const MAX_TOTAL_WORK = 2_000_000;
 /** Cap on the count of imported generated warnings (each also length-bounded by MAX_STRING). */
 const MAX_WARNINGS = 500;
-/** Upper bound for any imported timestamp (ms): 3000-01-01. Rejects absurd/far-future dates. */
+/**
+ * Version ceiling with headroom BELOW Number.MAX_SAFE_INTEGER (reviewer #4). Importing a
+ * version at the safe-integer ceiling would pass an isSafeInteger check yet leave the very
+ * next `version + 1` unable to advance — a project that throws on its first edit. Reserving a
+ * million counts of headroom means an imported version can always be bumped monotonically.
+ */
+const MAX_VERSION = Number.MAX_SAFE_INTEGER - 1_000_000;
+/** Absolute serialise ceiling for any timestamp (ms): 3000-01-01. */
 const MAX_TIMESTAMP = 32_503_680_000_000;
+/**
+ * Headroom reserved below MAX_TIMESTAMP for post-import edit stamps (reviewer #4). A future
+ * `updatedAt` anchors the next edit stamp at `updatedAt + 1`; importing right at the ceiling
+ * would push the next stamp past the range the parser accepts, so serialize→reparse would
+ * fail. Rejecting imports above MAX_IMPORT_TIMESTAMP keeps edits within the serialise range.
+ */
+const MAX_IMPORT_TIMESTAMP = MAX_TIMESTAMP - 1_000_000_000_000;
 /** Relative tolerance when re-deriving the calibration scale from the anchors on import. */
 const PX_PER_MM_REL_TOL = 1e-3;
 
@@ -263,20 +277,24 @@ function isNonNeg(v: unknown): v is number {
   return isNum(v) && v >= 0;
 }
 /**
- * A positive SAFE integer (versions). Number.isSafeInteger rejects >= 2^53, where `v + 1`
- * no longer advances — an imported such version would stall the monotonic version counter
- * and defeat unique export filenames (reviewer #4).
+ * A positive SAFE integer version, capped BELOW the safe-integer ceiling so the next bump can
+ * always advance (reviewer #4). A value at Number.MAX_SAFE_INTEGER would pass isSafeInteger yet
+ * make `version + 1` unrepresentable — a project that throws on its first edit — so it is
+ * rejected here rather than becoming a landmine.
  */
 function isPosInt(v: unknown): v is number {
-  return isNum(v) && Number.isSafeInteger(v) && v > 0;
+  return isNum(v) && Number.isSafeInteger(v) && v > 0 && v <= MAX_VERSION;
 }
 /** A non-negative safe integer (counts, byte sizes). */
 function isSafeCount(v: unknown): v is number {
   return isNum(v) && Number.isSafeInteger(v) && v >= 0;
 }
-/** A timestamp (ms) within a sane epoch..year-3000 range, not merely any finite number. */
+/**
+ * A timestamp (ms) within [epoch, MAX_IMPORT_TIMESTAMP], leaving headroom below the absolute
+ * serialise ceiling so a post-import edit stamp anchored on this value stays in range (#4).
+ */
 function isTimestamp(v: unknown): v is number {
-  return isNum(v) && v >= 0 && v <= MAX_TIMESTAMP;
+  return isNum(v) && v >= 0 && v <= MAX_IMPORT_TIMESTAMP;
 }
 /** A simple, bounded, non-zero-area ring of 3..MAX_RING_VERTICES points. */
 function isValidRing(v: unknown, path: string): void {

@@ -481,8 +481,8 @@ describe("import invariants at numeric extremes (reviewer #4)", () => {
     expect(useStore.getState().current!.updatedAt).toBeGreaterThan(FUTURE);
   });
 
-  it("edit → undo → redo stays monotonic and unique when imported near the safe-integer ceiling", () => {
-    importWith((proj) => (proj.version = Number.MAX_SAFE_INTEGER - 10));
+  it("edit → undo → redo stays monotonic and unique when imported near the version ceiling", () => {
+    importWith((proj) => (proj.version = Number.MAX_SAFE_INTEGER - 1_000_010)); // just below MAX_VERSION
     useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
     const seen = [useStore.getState().current!.version];
     const record = () => seen.push(useStore.getState().current!.version);
@@ -499,9 +499,11 @@ describe("import invariants at numeric extremes (reviewer #4)", () => {
     expect(seen.every(Number.isSafeInteger)).toBe(true);
   });
 
-  it("the version counter fails loudly at the ceiling rather than silently duplicating", () => {
-    importWith((proj) => (proj.version = Number.MAX_SAFE_INTEGER)); // safe int → passes import
-    // The next bump would be 2^53, where `v + 1` no longer advances: throw, never duplicate.
-    expect(() => useStore.getState().setThicknessMm(2)).toThrow(/overflow/i);
+  it("rejects a version at the safe-integer ceiling at IMPORT (no throw-on-edit landmine)", () => {
+    const file = JSON.parse(serializeProject(createSampleProject(1)));
+    file.project.version = Number.MAX_SAFE_INTEGER; // safe int, but no bump headroom
+    const res = useStore.getState().importProjectFile(JSON.stringify(file));
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/version|INVALID_SHAPE/);
   });
 });
