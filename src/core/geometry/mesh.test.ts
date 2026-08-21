@@ -328,10 +328,22 @@ describe("keep-outs are enforceable constraints with typed resolution (reviewer 
     if (!r.ok) expect(r.error.code).toBe("KEEPOUT_BLOCKED");
   });
 
-  it("fails closed as UNSUPPORTED when a bottom-side keep-out is shorter than the standoff gap", () => {
-    const r = buildBracketMesh(withKeepOut({ clearanceHeightMm: measured(3) })); // 3 mm < 6 mm gap, over the plate
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error.code).toBe("KEEPOUT_UNSUPPORTED");
+  it("resolves a bottom-side keep-out by its actual Z-interval against the plate (reviewer #4)", () => {
+    // Sample standoffHeight = inferred(6): the gap the keep-out must span to reach the plate.
+    // Footprint is mid-plate and clear of every standoff, so ONLY the Z-interval decides.
+    const gap = 6;
+    const cases: Array<[string, Project["board"]["keepOuts"][number]["clearanceHeightMm"], "satisfied-no-material" | "honored-by-subtraction"]> = [
+      ["zero height", measured(0), "satisfied-no-material"],
+      ["just below the gap", measured(gap - 0.5), "satisfied-no-material"],
+      ["exactly at the gap (contact tolerance)", measured(gap), "honored-by-subtraction"],
+      ["just above the gap", measured(gap + 0.5), "honored-by-subtraction"],
+      ["unknown clearance (conservative → reaches)", unknownVal<number>(), "honored-by-subtraction"],
+    ];
+    for (const [label, clearanceHeightMm, expected] of cases) {
+      const r = build(withKeepOut({ clearanceHeightMm }));
+      expect(r.effective.keepOuts[0].status, label).toBe(expected);
+      expect(r.recipe.keepOutHoles.length, label).toBe(expected === "honored-by-subtraction" ? 1 : 0);
+    }
   });
 
   it("BLOCKS export on a self-intersecting keep-out footprint", () => {

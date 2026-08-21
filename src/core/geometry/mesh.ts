@@ -82,13 +82,18 @@ export interface TabReport {
 }
 
 /**
- * How a keep-out was resolved as an ENFORCEABLE constraint (reviewer #1):
+ * How a keep-out was resolved as an ENFORCEABLE constraint (reviewer #1, #4):
  * - honored-by-subtraction: its footprint overlapped bracket material and was cut away.
- * - satisfied-no-material: no bracket material lies in its clearance volume (nothing to cut).
- * - blocked: it intersects bracket material that cannot be removed → generation fails closed.
- * - unsupported-semantic: it needs a clearance this generator cannot faithfully represent
- *   (e.g. a partial-height pocket) → generation fails closed rather than pretend.
- * Only the first two ever appear in a successful build; the latter two abort with a coded error.
+ * - satisfied-no-material: no bracket material lies in its clearance volume — resolved from
+ *   the actual Z intervals (top-side, or bottom-side clearance shorter than the standoff gap,
+ *   or a footprint clear of the plate/features) → nothing to cut.
+ * - blocked: it intersects bracket material that cannot be cleanly removed (overlaps a
+ *   standoff/tab, crosses the plate edge, overlaps another keep-out, or has a self-
+ *   intersecting footprint) → generation fails closed.
+ * - unsupported-semantic: RESERVED for a clearance this full-depth-subtraction generator
+ *   cannot represent. The current generator resolves every real case via the first three;
+ *   this value exists for a future partial-relief capability.
+ * Only the first two ever appear in a successful build; blocked aborts with a coded error.
  */
 export type KeepOutStatus = "honored-by-subtraction" | "satisfied-no-material" | "blocked" | "unsupported-semantic";
 
@@ -685,7 +690,9 @@ export function buildBracketMesh(project: Project): MeshResult {
       continue;
     }
 
-    // Bottom side: the component projects toward the bracket.
+    // Bottom side: the component projects toward the bracket. Resolve from the actual Z
+    // intervals (reviewer #4) — the plate occupies z=[0, base] and a keep-out of height h
+    // occupies [topZ - h, topZ], where topZ = base + standoffH is the board underside.
     if (mandatory.some((h) => !ringsSeparated(ring, h))) {
       return fail("KEEPOUT_BLOCKED", `${k.label} overlaps a standoff or side-tab bore that must remain; the bracket would intrude into the keep-out. Move the keep-out or the conflicting feature.`, k.label);
     }
@@ -693,15 +700,20 @@ export function buildBracketMesh(project: Project): MeshResult {
       keepReports.push({ ...head, status: "satisfied-no-material", reason: "footprint clears the plate and every feature" });
       continue;
     }
-    // The component reaches the plate only when its clearance spans the standoff gap. A known
-    // shorter clearance would need a partial-height relief above the plate that the flat
-    // full-depth footprint model cannot represent — fail closed rather than over- or under-cut.
-    if (ch != null && ch < standoffH) {
-      return fail(
-        "KEEPOUT_UNSUPPORTED",
-        `${k.label} is a bottom-side keep-out ${round2(ch)} mm tall, shorter than the ${round2(standoffH)} mm standoff gap. Enforcing only a partial-height clearance is not supported; increase its clearance to span the standoffs, or move it clear of the plate.`,
-        k.label,
-      );
+    // The keep-out volume reaches the plate only when its clearance spans the standoff gap
+    // (h ≥ standoffH, within contact tolerance). A KNOWN shorter clearance sits entirely above
+    // the plate top; with the footprint already clear of every standoff/tab, no bracket
+    // material lies in the clearance volume → satisfied with nothing to cut. UNKNOWN clearance
+    // is treated conservatively as reaching the plate (over-clearing a keep-out is safe;
+    // under-clearing is not).
+    const reachesPlate = ch == null || ch >= standoffH - CONTACT_EPS;
+    if (!reachesPlate) {
+      keepReports.push({
+        ...head,
+        status: "satisfied-no-material",
+        reason: `bottom-side clearance ${round2(ch as number)} mm sits within the ${round2(standoffH)} mm standoff gap, above the plate; no bracket material is in the keep-out`,
+      });
+      continue;
     }
     if (!ringContainsRing(plate, ring)) {
       return fail("KEEPOUT_BLOCKED", `${k.label} crosses the plate edge; it cannot be cut as a clean interior keep-out. Move it wholly inside or outside the plate footprint.`, k.label);
