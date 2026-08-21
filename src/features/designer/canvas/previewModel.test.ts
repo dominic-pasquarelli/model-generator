@@ -32,7 +32,7 @@ describe("previewModel — preview and metadata share one build (reviewer #5)", 
   it("labels a matching recorded generation as 'generated' and mirrors the live dims", () => {
     const p = createSampleProject(1);
     recordGeneration(p);
-    const preview = previewModel(p);
+    const preview = previewModel(p, buildBracketMesh(p));
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
     expect(preview.provenance).toBe("generated");
@@ -54,7 +54,7 @@ describe("previewModel — preview and metadata share one build (reviewer #5)", 
     // height changes both the generation key AND the reported bracket height.
     p.mount.standoffHeightMm = measured(staleRecordedDims.heightMm + 10);
 
-    const preview = previewModel(p);
+    const preview = previewModel(p, buildBracketMesh(p));
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
 
@@ -76,7 +76,7 @@ describe("previewModel — preview and metadata share one build (reviewer #5)", 
   it("never-generated model previews as a draft flagged 'not generated yet'", () => {
     const p = createSampleProject(1);
     expect(p.generated).toBeNull();
-    const preview = previewModel(p);
+    const preview = previewModel(p, buildBracketMesh(p));
     expect(preview.ok).toBe(true);
     if (!preview.ok) return;
     expect(preview.provenance).toBe("draft");
@@ -88,19 +88,39 @@ describe("previewModel — preview and metadata share one build (reviewer #5)", 
     const p = createSampleProject(1);
     // Remove a required fabrication input so the build fails honestly.
     p.mount.bossDiameterMm = { known: false };
-    const preview = previewModel(p);
+    const preview = previewModel(p, buildBracketMesh(p));
     expect(preview.ok).toBe(false);
-    if (!preview.ok) expect(preview.message.length).toBeGreaterThan(0);
+    if (!preview.ok && !preview.pending) expect(preview.message.length).toBeGreaterThan(0);
   });
 
   it("preserves the coded diagnostic on a build failure (reviewer #2)", () => {
     const p = createSampleProject(1);
     p.mount.bossDiameterMm = { known: false };
-    const preview = previewModel(p);
+    const preview = previewModel(p, buildBracketMesh(p));
     expect(preview.ok).toBe(false);
-    if (!preview.ok) {
+    if (!preview.ok && !preview.pending) {
       expect(preview.code).toBe("MISSING_BOSS");
       expect(preview.feature).toBeTruthy();
+    }
+  });
+
+  it("reports 'pending' — never a kernel run — while a buildable model has no build yet (reviewer #1)", () => {
+    const p = createSampleProject(1); // buildable, but no build supplied
+    const preview = previewModel(p, undefined);
+    expect(preview.ok).toBe(false);
+    if (!preview.ok) expect(preview.pending).toBe(true);
+  });
+
+  it("reports UNRESOLVED_MODEL (not pending) when the model has no board frame yet", () => {
+    const p = createSampleProject(1);
+    p.calibration = null; // no frame → cannot be built at all, not merely in flight
+    const preview = previewModel(p, undefined);
+    expect(preview.ok).toBe(false);
+    if (!preview.ok && !preview.pending) {
+      expect(preview.code).toBe("UNRESOLVED_MODEL");
+      expect(preview.feature).toBe("calibration");
+    } else {
+      throw new Error("expected an UNRESOLVED_MODEL error, not pending");
     }
   });
 });

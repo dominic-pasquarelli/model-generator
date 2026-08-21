@@ -12,6 +12,7 @@ import { Viewport2D } from "./Viewport2D";
 import { Preview3D } from "./Preview3D";
 import { MeshView3D } from "./MeshView3D";
 import { previewModel } from "./previewModel";
+import { useLiveBuild } from "./useLiveBuild";
 import { CalibrationPopover } from "../dialogs/CalibrationPopover";
 import { ExportDialog } from "../dialogs/ExportDialog";
 
@@ -94,9 +95,10 @@ function ContextPill({ project, step }: { project: Project; step: string }) {
   return null;
 }
 
-/** Export-mode 3D view. Renders the same live build the STL/STEP exporters serialise. */
+/** Export-mode 3D view. Renders the same keyed build the STL/STEP exporters serialise. */
 function Export3DView({ project }: { project: Project }) {
-  const preview = useMemo(() => previewModel(project), [project]);
+  const build = useLiveBuild(project);
+  const preview = useMemo(() => previewModel(project, build), [project, build]);
   return <MeshView3D mesh={preview.ok ? preview.mesh : null} view="fit" />;
 }
 

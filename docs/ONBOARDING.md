@@ -62,4 +62,4 @@ Windows note: use `python` for the same commands if `python3` resolves to the Wi
 
 ## Before Extending Beyond The Shell
 
-The app shell is built on the Cadence-adjacent browser-first stack (ADR 0003). Before wiring the deferred features — a real geometry kernel, STEP export, a hardened project file format, camera/skew calibration — resolve or deliberately spike the owner decisions listed in [NEXT.md](NEXT.md) and follow the matching plan under [`docs/plans/`](plans/). Keep new geometry behind the existing `GeometryAdapter` seam and keep unknown values distinct from zero.
+The app shell is built on the Cadence-adjacent browser-first stack (ADR 0003). Before wiring the deferred features — a real geometry kernel, STEP export, a hardened project file format, camera/skew calibration — resolve or deliberately spike the owner decisions listed in [NEXT.md](NEXT.md) and follow the matching plan under [`docs/plans/`](plans/). Keep new geometry behind the keyed build-service seam (`buildBracketMesh` → `MeshResult`, run off-thread by `geometryWorker.ts`/`buildClient.ts` and cached by generation key) and keep unknown values distinct from zero.

@@ -17,7 +17,7 @@
  * a generated ASCII mesh; downstream slicer compatibility is not yet verified. Autodesk
  * Fusion import and printed-part fit remain unverified evidence gates (ADR 0006).
  */
-import { buildBracketMesh, MIN_BOSS_WALL_MM, type BracketMesh, type EffectiveParams, type EffectiveValue, type KeepOutStatus, type SolidRecipe } from "@/core/geometry/mesh";
+import { buildBracketMesh, MIN_BOSS_WALL_MM, type BracketMesh, type EffectiveParams, type EffectiveValue, type KeepOutStatus, type MeshResult, type SolidRecipe } from "@/core/geometry/mesh";
 import { ACTIVE_ADAPTER_VERSION } from "@/core/geometry/adapter";
 import { generationKey } from "@/core/project/derive";
 import { GENERATOR_VERSION } from "@/core/project/types";
@@ -301,13 +301,24 @@ export type BuildExportResult =
   | { ok: true; artifact: ExportArtifact }
   | { ok: false; readiness: ExportReadiness };
 
-export function buildExport(project: Project, options: ExportOptions): BuildExportResult {
+export type ExportSnapshotResult =
+  | { ok: true; snapshot: ArtifactBuildSnapshot }
+  | { ok: false; readiness: ExportReadiness };
+
+/**
+ * Stage 1 of the export job (reviewer #1): gate readiness and produce the ONE immutable
+ * {@link ArtifactBuildSnapshot} every later output is derived from. Accepts an already-built
+ * `prebuilt` mesh so the store can hand over the SAME worker-produced geometry build it
+ * cached for preview/validation — the kernel is not re-run on the main thread. When no build
+ * is supplied (direct callers/tests) it falls back to building here.
+ */
+export function exportSnapshot(project: Project, prebuilt?: MeshResult): ExportSnapshotResult {
   const readiness = exportReadiness(project);
   if (!readiness.ready) return { ok: false, readiness };
 
   // The readiness gate guarantees the solid can be built; treat a failure here (including a
   // failed manifold audit) as a hard, diagnosable blocker rather than writing a bad file.
-  const meshResult = buildBracketMesh(project);
+  const meshResult = prebuilt ?? buildBracketMesh(project);
   if (!meshResult.ok) {
     return {
       ok: false,
@@ -336,24 +347,34 @@ export function buildExport(project: Project, options: ExportOptions): BuildExpo
     meshHash: meshResult.meshHash,
     generationKey: generationKey(project) ?? "",
   };
+  return { ok: true, snapshot };
+}
 
-  const nowIso = options.nowIso ?? new Date(options.now ?? Date.now()).toISOString();
-  const now = options.now ?? Date.now();
+/**
+ * Stage 2: serialise the STL/STEP body from the snapshot. This is the CPU-heavy step moved
+ * off the main thread (reviewer #1). `nowIso` is threaded in so the STEP header timestamp and
+ * the sidecar's `createdAtIso` are identical.
+ */
+export function serializeBody(project: Project, snapshot: ArtifactBuildSnapshot, format: ExportFormat, nowIso: string): string {
+  return format === "step"
+    ? meshToStep(snapshot.mesh, {
+        productName: safeProductName(project),
+        author: "Model Generator",
+        organization: "local",
+        createdIso: nowIso,
+        originatingSystem: GENERATOR_VERSION,
+      })
+    : meshToAsciiStl(snapshot.mesh, safeProductName(project));
+}
 
-  // Serialise the body FIRST so the sidecar and record can carry the SHA-256 of the exact
-  // bytes that will be written (reviewer #5B) — a file-integrity hash, distinct from meshHash.
-  const body =
-    options.format === "step"
-      ? meshToStep(snapshot.mesh, {
-          productName: safeProductName(project),
-          author: "Model Generator",
-          organization: "local",
-          createdIso: nowIso,
-          originatingSystem: GENERATOR_VERSION,
-        })
-      : meshToAsciiStl(snapshot.mesh, safeProductName(project));
+/**
+ * Stage 3: hash the exact body (reviewer #5B) and assemble the sidecar + export record. The
+ * SHA-256 is over the already-serialised bytes, so it verifies the file that ships — not the
+ * mesh. Kept as its own stage so the worker can report hashing as a distinct completed step.
+ */
+export function finalizeArtifact(project: Project, snapshot: ArtifactBuildSnapshot, body: string, options: ExportOptions, nowIso: string): ExportArtifact {
+  const now = options.now ?? Date.parse(nowIso);
   const artifactSha256 = sha256Text(body);
-
   const meta = buildMetadata(project, options.format, snapshot, nowIso, artifactSha256);
   const sidecar = options.writeSidecar ? serializeSidecar(meta) : null;
   const fileName = exportFileName(project, options.format);
@@ -365,8 +386,25 @@ export function buildExport(project: Project, options: ExportOptions): BuildExpo
     artifactSha256,
     paramsHash: snapshot.generationKey,
     generationKey: snapshot.generationKey,
+    // Origin binding (reviewer #6): the exact project id + version this artifact was built from.
+    projectId: project.id,
+    projectVersion: project.version,
     createdAt: now,
     wroteSidecar: options.writeSidecar,
   };
-  return { ok: true, artifact: { fileName, format: options.format, body, sidecar, metadata: meta, record } };
+  return { fileName, format: options.format, body, sidecar, metadata: meta, record };
+}
+
+/**
+ * Synchronous convenience that chains all three stages (direct callers + tests). The store's
+ * live export path runs the same stages inside a worker via the export client, reporting
+ * progress between them, so a long serialization stays off the main thread and cancellable.
+ */
+export function buildExport(project: Project, options: ExportOptions, prebuilt?: MeshResult): BuildExportResult {
+  const snap = exportSnapshot(project, prebuilt);
+  if (!snap.ok) return { ok: false, readiness: snap.readiness };
+  const nowIso = options.nowIso ?? new Date(options.now ?? Date.now()).toISOString();
+  const body = serializeBody(project, snap.snapshot, options.format, nowIso);
+  const artifact = finalizeArtifact(project, snap.snapshot, body, options, nowIso);
+  return { ok: true, artifact };
 }

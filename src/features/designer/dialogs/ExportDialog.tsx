@@ -11,7 +11,7 @@ import { exportFileName } from "@/core/export/exporter";
 import { inferredFabricationDims } from "@/core/project/derive";
 import { fmtLen, unitLabel } from "@/core/units/units";
 import { hashLabel } from "@/lib/format";
-import { downloadArtifact, useStore } from "@/state/store";
+import { useStore } from "@/state/store";
 
 export function ExportDialog({ project }: { project: Project }) {
   const ex = useStore((s) => s.ui.export);
@@ -135,9 +135,9 @@ export function ExportDialog({ project }: { project: Project }) {
               variant="primary"
               icon="export"
               onClick={() => {
-                // Record the export in history ONLY when the download is actually initiated.
+                // Download AND record are one gated step: the export is recorded in history only
+                // when the download actually initiates (reviewer #6).
                 commitExportDownload();
-                downloadArtifact(ex.artifact!);
               }}
             >
               Download files
@@ -146,8 +146,14 @@ export function ExportDialog({ project }: { project: Project }) {
         }
       >
         <div style={{ fontSize: 12, color: "var(--text-2)", marginBottom: 6 }}>
-          Prepared in memory. Download to write the files — nothing is recorded as exported until you do.
+          Prepared in memory. Download to write the files — nothing is recorded as exported until the download starts.
         </div>
+        {ex.downloadError ? (
+          <div role="alert" style={{ marginBottom: 8, fontSize: 11.5, color: "var(--danger, #ffb4a8)", display: "flex", gap: 6, alignItems: "flex-start" }}>
+            <Icon name="triangle" style={{ width: 13, height: 13, marginTop: 1 }} />
+            <span>Download did not start ({ex.downloadError}). Nothing was recorded — try again.</span>
+          </div>
+        ) : null}
         <FileBox
           icon="file"
           name={ex.artifact.fileName}

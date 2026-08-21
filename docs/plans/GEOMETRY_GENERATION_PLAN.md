@@ -16,7 +16,7 @@ related:
 
 > **Status update (2026-08-21).** This plan is now a `living` record split into three layers.
 >
-> **Current (Built + Verified host-level).** A **self-contained TypeScript mesh solid generator** is the active `GeometryAdapter` (`src/core/geometry/mesh.ts`, `solidGenerator.ts`; **ADR 0005 Accepted**). It produces a real watertight solid that is a **single connected, closed manifold** — plate + bored standoffs + optional side tabs welded into ONE body, proven fail-closed by an aggregate audit (one component, every edge shared by exactly two oppositely-oriented triangles, single manifold vertex fans, positive volume). It feeds the live 3D preview and both exporters from one immutable build snapshot. Generation now runs in a **Web Worker** (`geometryWorker.ts`, `workerGenerator.ts`) with a real `AbortSignal` → `terminate()` cancellation (Step 5, Built), and **keep-outs are enforceable constraints** with typed resolution (honored-by-subtraction / satisfied-no-material / blocked / unsupported-semantic) that fail generation closed rather than silently skipping (Step 4, Built). Coded failure taxonomy (Step 6) is Built. This satisfies the plan's Steps 1, 3–6 via the mesh path.
+> **Current (Built + Verified host-level).** A **self-contained TypeScript mesh solid generator** produces the geometry (`src/core/geometry/mesh.ts` — `buildBracketMesh`; **ADR 0005 Accepted**). It builds a real watertight solid that is a **single connected, closed manifold** — plate + bored standoffs + optional side tabs welded into ONE body, proven fail-closed by an aggregate audit (one component, every edge shared by exactly two oppositely-oriented triangles, single manifold vertex fans, positive volume). One **keyed build service** owns generation: the store drives a **Web Worker** (`geometryWorker.ts` via `buildClient.ts`) that runs `buildBracketMesh` off the main thread and caches the immutable result under the canonical **generation key**, and the live 3D preview, semantic **validation** (which never runs the kernel), and both exporters all consume that ONE cached build — the mesh is not rebuilt synchronously per consumer. Cancellation is a real `AbortSignal` → `terminate()` hard stop of the in-flight build (Step 5, Built), and STL/STEP **serialization + artifact hashing** run off-thread as a separate cancellable job with real per-stage progress (`exportWorker.ts` via `exportClient.ts`). **Keep-outs are enforceable constraints** with typed resolution (honored-by-subtraction / satisfied-no-material / blocked / unsupported-semantic) that fail generation closed rather than silently skipping (Step 4, Built). Coded failure taxonomy (Step 6) is Built. This satisfies the plan's Steps 1, 3–6 via the mesh path.
 >
 > **Deferred.** The **exact analytic B-rep kernel** (OCCT/replicad, Step 2) and the **analytic** STEP-capability probe (Step 7) are not built; the shipped STEP is a FACETED B-rep (ADR 0006), not analytic surfaces. The Autodesk Fusion import evidence gate and printed-part fit remain unproven (ADR 0006).
 >
@@ -30,12 +30,14 @@ screw/insert bores, keep-out avoidance, and optional side tabs. The **mesh path 
 Current layer above is Built and Verified host-level**; the **analytic-kernel path described in the
 rest of this document is Deferred** and remains owned and gated by the (now Accepted) `ADR 0005`.
 
-The shipped adapter is the self-contained mesh solid generator (Current layer). A deterministic
-**illustrative mock generator** is retained only for test isolation (`mockGenerator.ts`); it emits a
-placeholder mesh and is never the production path. This plan describes how an exact analytic kernel
-could later replace the mesh generator behind the same unchanged `GeometryAdapter` boundary. It maps
-to `BOARD_MOUNT_DESIGNER_MVP_PLAN` Phase 5 (geometry adapter and generator) and feeds Phase 6
-(preview) and Phase 7 (STEP/Fusion gate).
+The shipped generator is the self-contained mesh solid generator (`buildBracketMesh`, Current layer),
+run through ONE keyed worker-backed build service (`geometryWorker.ts` + `buildClient.ts`) whose
+immutable result is cached by generation key and shared by preview, validation, and export. (The
+earlier illustrative mock and the thin `GeometryAdapter`/`solidGenerator`/`workerGenerator` wrappers
+were removed once the store owned the keyed build directly — tests inject a `BuildFn` seam instead.)
+This plan describes how an exact analytic kernel could later replace the mesh generator behind the
+same unchanged `MeshResult` build contract. It maps to `BOARD_MOUNT_DESIGNER_MVP_PLAN` Phase 5
+(geometry generator) and feeds Phase 6 (preview) and Phase 7 (STEP/Fusion gate).
 
 In scope: the adapter TypeScript interface, kernel candidates and their STEP-capability gate, the
 deterministic boolean-generation algorithm, parameter hashing for reproducibility, worker offloading
@@ -195,13 +197,19 @@ interface HashInput {
    keep-out produces either a clean subtracted body or a blocking `GeometryWarning` with the offending
    `entityIds`.*
 
-5. **Worker offloading. (Built.)** Generation runs in a dedicated Web Worker (`geometryWorker.ts`,
-   `workerGenerator.ts`) with a real `AbortSignal` wired to `worker.terminate()` for a hard cancel;
-   the worker is built lazily and falls back to the synchronous generator where Workers are absent.
-   The original design (progress-per-stage, transferables) is deferred with the analytic kernel.
+5. **Worker offloading. (Built.)** ONE keyed build service runs the full `buildBracketMesh` in a
+   dedicated Web Worker (`geometryWorker.ts` via `buildClient.ts`), keyed by the canonical generation
+   key and cached in the store so preview, validation, and export share the SAME build instead of each
+   recomputing the mesh on the main thread; a real `AbortSignal` wired to `worker.terminate()` gives a
+   hard cancel, superseding edits hard-cancel older in-flight builds, and the worker is built lazily
+   with a synchronous fallback only where Workers are absent. STL/STEP serialization + artifact hashing
+   run off-thread as a separate cancellable job (`exportWorker.ts` via `exportClient.ts`) that streams
+   real per-stage progress (build → serialise → hash), not a synthetic timer. Transferables remain
+   deferred (the immutable build is structure-cloned; correct and simple for a bounded mesh).
    *Exit Evidence (browser-level, Built): an e2e responsiveness gate imports an oversized file and
    confirms the tab stays responsive; the store cancels an in-flight generation via the AbortSignal
-   and attaches no stale result.*
+   and attaches no stale result; a unit integration test proves ONE build per key is shared by
+   preview + generation and reused across an unchanged key.*
 
 6. **Failure taxonomy and error codes.** Map kernel boolean failures to the taxonomy below with
    `entityIds` and parameters attached. *Exit Evidence (host-level): fault-injected fixtures (zero-radius

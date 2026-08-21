@@ -1,27 +1,23 @@
 /**
- * Dedicated Web Worker that runs geometry generation OFF the main thread (reviewer #3).
+ * Dedicated Web Worker that runs the FULL geometry build off the main thread (reviewer #1).
  *
- * The store posts the canonical {@link Project} here; this worker runs the same synchronous
- * {@link generateModelSync} core the main-thread adapter uses and posts back the resulting
- * metadata. Because the heavy `buildBracketMesh` executes on this thread, a long generation
- * never blocks the UI, and the main thread can genuinely cancel it by `terminate()`-ing the
- * worker (the only way to interrupt a busy synchronous computation).
+ * The main thread posts the canonical {@link Project}; this worker runs {@link buildBracketMesh}
+ * — mesh assembly, the manifold audit, effective params, the mm recipe, and the mesh hash — and
+ * posts back one immutable build result (or a coded failure). Because every heavy computation
+ * happens here, the main thread stays responsive, and a long build can be genuinely cancelled by
+ * terminating the worker. The result (including its typed-array mesh buffers) is structure-cloned
+ * back; the build itself, not just metadata, is what runs off-thread.
  */
 import type { Project } from "@/core/project/types";
-import type { GenerateResult } from "./adapter";
-import { generateModelSync } from "./solidGenerator";
+import { buildBracketMesh, type MeshResult } from "./mesh";
 
 export interface WorkerRequest {
   id: number;
   project: Project;
 }
-export type WorkerResponse = { id: number } & GenerateResult;
+export type WorkerResponse = { id: number; result: MeshResult };
 
-/**
- * Minimal view of the worker global — just the two members used here. Avoids pulling the
- * whole "WebWorker" lib into the app tsconfig, whose globals collide with "DOM" (both declare
- * `self`, `postMessage`, …).
- */
+/** Minimal view of the worker global — avoids pulling the whole "WebWorker" lib into tsconfig. */
 interface WorkerScope {
   onmessage: ((e: MessageEvent<WorkerRequest>) => void) | null;
   postMessage: (message: WorkerResponse) => void;
@@ -30,15 +26,11 @@ const ctx = self as unknown as WorkerScope;
 
 ctx.onmessage = (e: MessageEvent<WorkerRequest>) => {
   const { id, project } = e.data;
-  let result: GenerateResult;
+  let result: MeshResult;
   try {
-    result = generateModelSync(project);
+    result = buildBracketMesh(project);
   } catch (err) {
-    result = {
-      ok: false,
-      error: { code: "WORKER_EXCEPTION", message: err instanceof Error ? err.message : "The geometry worker threw while generating." },
-    };
+    result = { ok: false, error: { code: "WORKER_EXCEPTION", message: err instanceof Error ? err.message : "The geometry worker threw while building." } };
   }
-  const response: WorkerResponse = { id, ...result };
-  ctx.postMessage(response);
+  ctx.postMessage({ id, result });
 };

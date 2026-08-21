@@ -460,6 +460,10 @@ function validateExportRecord(e: unknown, path: string): void {
   // Optional so records written before the field existed still open; when present it must be
   // a bounded string (the SHA-256 hex of the exported body).
   req(r.artifactSha256 === undefined || isBoundedStr(r.artifactSha256), `${path}.artifactSha256`);
+  // Origin binding (reviewer #6). Optional so records written before the fields existed still
+  // open; when present the id is a bounded string and the version an in-range safe count.
+  req(r.projectId === undefined || isBoundedStr(r.projectId), `${path}.projectId`);
+  req(r.projectVersion === undefined || isPosInt(r.projectVersion), `${path}.projectVersion`);
   req(isEnum(r.format, EXPORT_FORMATS), `${path}.format`);
   req(isSafeCount(r.sizeBytes) && isTimestamp(r.createdAt), `${path}.numbers (safe size, in-range timestamp)`);
   req(isBool(r.wroteSidecar), `${path}.wroteSidecar`);

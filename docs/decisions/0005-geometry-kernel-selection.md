@@ -19,7 +19,7 @@ Accepted (2026-08-19). A **self-contained TypeScript mesh solid generator** is B
 
 ## Decision (2026-08-19)
 
-The **mesh-only path** in the matrix below was promoted from a fallback to the shipped generator and implemented dependency-free in TypeScript (`src/core/geometry/mesh.ts` + `src/core/geometry/solidGenerator.ts`, the active `GeometryAdapter`).
+The **mesh-only path** in the matrix below was promoted from a fallback to the shipped generator and implemented dependency-free in TypeScript (`src/core/geometry/mesh.ts` — `buildBracketMesh`). It runs through ONE keyed, worker-backed build service (`geometryWorker.ts` + `buildClient.ts`) whose immutable result the store caches by generation key for preview, validation, and export; an analytic kernel could later replace the mesh path behind the same `MeshResult` contract.
 
 Rationale: the Board Mount Designer geometry family — a prismatic plate, cylindrical standoffs with coaxial bores, and box tabs — is simple enough to generate a **real, watertight, single connected closed-manifold solid deterministically without any WASM kernel**. This clears the browser-viability, determinism, and diagnostics criteria immediately at zero bundle cost, and the same solid feeds the 3D preview and both exporters (the "same shared geometry path" rule).
 
@@ -35,7 +35,7 @@ What is explicitly **not** decided or earned here:
 - An **exact analytic B-rep kernel** (OCCT-WASM / replicad) is deferred. Consequently the STEP export is a **faceted** B-rep (curved standoff walls are facets), owned by ADR 0006.
 - **Printed-part fit** is unproven (Phase 9).
 
-Reconsideration trigger: if analytic curved surfaces, true fillets, or parametric CAD editability beyond faceted import are required, revisit the OCCT-WASM path behind the unchanged `GeometryAdapter` seam — the shell depends only on that interface, so the swap does not touch the app.
+Reconsideration trigger: if analytic curved surfaces, true fillets, or parametric CAD editability beyond faceted import are required, revisit the OCCT-WASM path behind the unchanged `MeshResult`/build-service seam — the store and every consumer depend only on the keyed build result, so the swap does not touch the app.
 
 The original spike framing below is retained for provenance.
 

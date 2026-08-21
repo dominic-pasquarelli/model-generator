@@ -5,6 +5,7 @@ import { Chip } from "@/components/ui/Chip";
 import { SaveStateIndicator, ThemeToggle, TopBar } from "@/components/shell/TopBar";
 import { validateProject } from "@/core/validation/validate";
 import { exportReadiness } from "@/core/validation/validate";
+import { generationKey } from "@/core/project/derive";
 import { useStore } from "@/state/store";
 import { CanvasStage } from "./canvas/CanvasStage";
 import { Inspector } from "./inspector/Inspector";
@@ -36,7 +37,14 @@ export function DesignerPage() {
     return () => window.removeEventListener("keydown", handler);
   }, [undo, redo]);
 
-  const validations = useMemo(() => (project ? validateProject(project) : []), [project]);
+  // The keyed build the store produced off the main thread; validation reads its status to
+  // tell a coded geometry failure from a merely-stale generation without running the kernel
+  // (reviewer #1). `undefined` while a build is in flight → validation reports "stale" until
+  // the real result lands.
+  const buildKey = project ? generationKey(project) : null;
+  const build = useStore((s) => (buildKey ? s.builds[buildKey] : undefined));
+
+  const validations = useMemo(() => (project ? validateProject(project, build) : []), [project, build]);
   const stepStates = useMemo(
     () => (project ? deriveStepStates(project, validations, activeStep) : []),
     [project, validations, activeStep],

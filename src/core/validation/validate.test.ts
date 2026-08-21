@@ -1,10 +1,28 @@
 import { describe, it, expect } from "vitest";
 import { createProject } from "@/core/project/schema";
 import { createSampleProject } from "@/core/project/fixtures";
-import { mockGenerator } from "@/core/geometry/mockGenerator";
+import { buildBracketMesh } from "@/core/geometry/mesh";
+import { generationKey } from "@/core/project/derive";
 import { measured, unknownVal } from "@/core/project/value";
-import type { Calibration, MountingHole } from "@/core/project/types";
+import type { Calibration, GeneratedModel, MountingHole, Project } from "@/core/project/types";
 import { exportReadiness, summarize, validateProject } from "./validate";
+
+/** Record a CURRENT generation from one real build, the way the store does. */
+function recordGeneration(p: Project): void {
+  const built = buildBracketMesh(p);
+  if (!built.ok) throw new Error(`fixture should build: ${built.error.code}`);
+  const key = generationKey(p)!;
+  const generated: GeneratedModel = {
+    sourceVersion: p.version,
+    key,
+    paramsHash: key,
+    dims: built.dims,
+    warnings: built.warnings,
+    createdAt: 1,
+    durationMs: null,
+  };
+  p.generated = generated;
+}
 
 function calibrated(): Calibration {
   return {
@@ -184,10 +202,11 @@ describe("exportReadiness", () => {
   it("surfaces a CODED geometry failure as its own blocker, not the generic stale one (reviewer #2)", () => {
     const p = createSampleProject(1_000_000);
     // Generatable per input validation, but the geometry build fails closed (custom tolerance
-    // selected with no value). This must recompute and show the code, not "out of date".
+    // selected with no value). Validation reads the keyed build STATUS (never runs the kernel
+    // itself, reviewer #1) and shows the code, not "out of date".
     p.mount.tolerance = "custom";
     p.mount.customToleranceMm = null;
-    const v = validateProject(p);
+    const v = validateProject(p, buildBracketMesh(p));
     const failed = v.find((x) => x.id === "generation-failed");
     expect(failed, "a coded generation-failed blocker is present").toBeTruthy();
     expect(failed!.title).toMatch(/MISSING_TOLERANCE/);
@@ -195,18 +214,19 @@ describe("exportReadiness", () => {
     expect(exportReadiness(p, v).ready).toBe(false);
   });
 
-  it("uses the generic stale blocker only when the geometry genuinely builds", () => {
+  it("uses the generic stale blocker when the build is ok/absent, not a coded failure", () => {
     const p = createSampleProject(1_000_000); // valid, builds, but has no current generation
-    const v = validateProject(p);
-    expect(v.some((x) => x.id === "generation-stale")).toBe(true);
-    expect(v.some((x) => x.id === "generation-failed")).toBe(false);
+    // Build status ok → stale, not failed. And with no build passed at all, it must also
+    // degrade to stale (validation never runs the kernel on its own).
+    for (const v of [validateProject(p, buildBracketMesh(p)), validateProject(p)]) {
+      expect(v.some((x) => x.id === "generation-stale")).toBe(true);
+      expect(v.some((x) => x.id === "generation-failed")).toBe(false);
+    }
   });
 
-  it("labels generation warnings honestly, never as 'clipped standoff seats' (reviewer #1)", async () => {
+  it("labels generation warnings honestly, never as 'clipped standoff seats' (reviewer #1)", () => {
     const p = createSampleProject(1_000_000);
-    const gen = await mockGenerator.generate(p);
-    expect(gen.ok).toBe(true);
-    if (gen.ok) p.generated = gen.model;
+    recordGeneration(p);
     const checklist = exportReadiness(p).checklist;
     // The old mislabel is gone; the count is described as generic warnings.
     expect(checklist.some((c) => /clipped standoff seat/.test(c))).toBe(false);

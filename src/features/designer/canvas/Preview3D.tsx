@@ -9,6 +9,7 @@ import { fmtLen, unitLabel } from "@/core/units/units";
 import { useStore, type DesignerUi } from "@/state/store";
 import { MeshView3D } from "./MeshView3D";
 import { previewModel } from "./previewModel";
+import { useLiveBuild } from "./useLiveBuild";
 
 const VIEWS: DesignerUi["view3d"][] = ["iso", "top", "front", "fit"];
 const VIEW_LABEL: Record<DesignerUi["view3d"], string> = { iso: "Iso", top: "Top", front: "Front", fit: "Fit" };
@@ -27,7 +28,8 @@ export function Preview3D({ project }: { project: Project }) {
   const toggleAuto = useStore((s) => s.toggleAuto);
   const generate = useStore((s) => s.generate);
 
-  const preview = useMemo(() => previewModel(project), [project]);
+  const build = useLiveBuild(project);
+  const preview = useMemo(() => previewModel(project, build), [project, build]);
   const liveWarning = preview.ok ? preview.warnings[0] : undefined;
 
   return (
@@ -85,6 +87,22 @@ export function Preview3D({ project }: { project: Project }) {
             </Button>
           </div>
         </>
+      ) : preview.pending ? (
+        <div
+          style={{
+            position: "absolute",
+            inset: 0,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            color: "#7c8798",
+            fontSize: 12.5,
+            textAlign: "center",
+            padding: 40,
+          }}
+        >
+          Building the bracket off the main thread…
+        </div>
       ) : (
         <div
           style={{

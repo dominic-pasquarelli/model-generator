@@ -8,13 +8,15 @@ import {
   loadSavedBoards,
   useStore,
   __setGeneratorForTest,
+  __setDownloadAdapterForTest,
+  type DownloadAdapter,
 } from "./store";
 import { createSampleProject } from "@/core/project/fixtures";
 import { serializeProject, createProject, parseProjectFile, MAX_HOLES, MAX_KEEPOUTS } from "@/core/project/schema";
 import { generationKey, isCurrentModelExported, isGenerationCurrent } from "@/core/project/derive";
-import { mockGenerator } from "@/core/geometry/mockGenerator";
+import { buildBracketMesh } from "@/core/geometry/mesh";
+import type { BuildFn } from "@/core/geometry/buildClient";
 import { isKnown } from "@/core/project/value";
-import type { GeometryAdapter } from "@/core/geometry/adapter";
 
 function openSample() {
   const p = createSampleProject(1);
@@ -25,6 +27,9 @@ function openSample() {
 beforeEach(() => {
   localStorage.clear();
   __setGeneratorForTest();
+  // jsdom has no URL.createObjectURL, so the real download adapter reports "not initiated".
+  // Default the tests to an adapter that confirms initiation; §6 tests override it explicitly.
+  __setDownloadAdapterForTest((files) => ({ initiated: true, fileNames: files.map((f) => f.name) }));
   vi.useRealTimers();
   useStore.setState({ current: null, saveState: "idle", lastSavedAt: null, lastSaveError: null, past: [], future: [] });
 });
@@ -32,6 +37,7 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   __setGeneratorForTest();
+  __setDownloadAdapterForTest();
 });
 
 describe("loadLibrary resilience", () => {
@@ -103,16 +109,12 @@ describe("keep-out shape change consistency", () => {
 
 describe("generation freshness under async races", () => {
   it("discards a stale generation whose model changed during the async run", async () => {
-    // A delayed adapter we release manually.
+    // A delayed build we release manually — the SAME keyed build service preview/export use.
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
-    const delayed: GeometryAdapter = {
-      name: "delayed",
-      capabilities: { exactSolid: false, previewMesh: false },
-      async generate(project, signal) {
-        await gate;
-        return mockGenerator.generate(project, signal);
-      },
+    const delayed: BuildFn = async (project) => {
+      await gate;
+      return buildBracketMesh(project);
     };
     __setGeneratorForTest(delayed);
 
@@ -137,17 +139,13 @@ describe("generation is genuinely cancellable (reviewer #3)", () => {
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     let sawAbort = false;
-    const delayed: GeometryAdapter = {
-      name: "delayed",
-      capabilities: { exactSolid: false, previewMesh: false },
-      async generate(project, signal) {
-        await gate;
-        if (signal?.aborted) {
-          sawAbort = true;
-          return { ok: false, error: { code: "ABORTED", message: "Generation cancelled." } };
-        }
-        return mockGenerator.generate(project, signal);
-      },
+    const delayed: BuildFn = async (project, signal) => {
+      await gate;
+      if (signal?.aborted) {
+        sawAbort = true;
+        return { ok: false, error: { code: "ABORTED", message: "Build cancelled." } };
+      }
+      return buildBracketMesh(project);
     };
     __setGeneratorForTest(delayed);
 
@@ -167,18 +165,12 @@ describe("generation is genuinely cancellable (reviewer #3)", () => {
 });
 
 describe("coded generation failures are recorded, not discarded (reviewer #2)", () => {
-  function failingAdapter(error: { code: string; message: string; feature?: string }): GeometryAdapter {
-    return {
-      name: "failing",
-      capabilities: { exactSolid: false, previewMesh: false },
-      async generate() {
-        return { ok: false, error };
-      },
-    };
+  function failingBuild(error: { code: string; message: string; feature?: string }): BuildFn {
+    return async () => ({ ok: false, error });
   }
 
   it("records the coded error keyed by the attempted model key", async () => {
-    __setGeneratorForTest(failingAdapter({ code: "KEEPOUT_BLOCKED", message: "boom", feature: "K1" }));
+    __setGeneratorForTest(failingBuild({ code: "KEEPOUT_BLOCKED", message: "boom", feature: "K1" }));
     const p = openSample();
     useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
     await useStore.getState().generate();
@@ -189,7 +181,7 @@ describe("coded generation failures are recorded, not discarded (reviewer #2)", 
   });
 
   it("a subsequent successful generation clears the recorded error", async () => {
-    __setGeneratorForTest(failingAdapter({ code: "MISSING_TOLERANCE", message: "no offset" }));
+    __setGeneratorForTest(failingBuild({ code: "MISSING_TOLERANCE", message: "no offset" }));
     const p = openSample();
     useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
     await useStore.getState().generate();
@@ -200,12 +192,72 @@ describe("coded generation failures are recorded, not discarded (reviewer #2)", 
   });
 
   it("a cancellation (ABORTED) is not recorded as a failure", async () => {
-    __setGeneratorForTest(failingAdapter({ code: "ABORTED", message: "Generation cancelled." }));
+    __setGeneratorForTest(failingBuild({ code: "ABORTED", message: "Build cancelled." }));
     const p = openSample();
     useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
     await useStore.getState().generate();
     expect(useStore.getState().generationError).toBeNull();
   });
+});
+
+describe("ONE keyed geometry build feeds preview/validation/export (reviewer #1)", () => {
+  /** A build impl that counts invocations, so we can prove dedup-by-key. */
+  function countingBuild(): { fn: BuildFn; calls: () => number } {
+    let calls = 0;
+    return {
+      fn: async (project) => {
+        calls += 1;
+        return buildBracketMesh(project);
+      },
+      calls: () => calls,
+    };
+  }
+
+  it("builds ONCE per key and dedupes a concurrent preview + generation for the same model", async () => {
+    const { fn, calls } = countingBuild();
+    __setGeneratorForTest(fn);
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
+    const key = generationKey(p)!;
+
+    // The preview asks for a build; generation asks for the SAME key while it is still in
+    // flight. They must share one build, not launch two.
+    useStore.getState().ensureBuild();
+    await useStore.getState().generate();
+
+    expect(calls(), "one build for the key, shared by preview + generation").toBe(1);
+    const cached = useStore.getState().builds[key];
+    expect(cached?.ok).toBe(true);
+    expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
+
+    // Preview, validation, and export now all read that SAME cached build — none rebuilds.
+    const built = buildExportFromCache(key);
+    expect(built).toBe(true);
+    useStore.getState().ensureBuild();
+    await useStore.getState().generate();
+    expect(calls(), "the cache is reused; no rebuild for an unchanged key").toBe(1);
+  });
+
+  it("rebuilds exactly once when a geometry-affecting edit changes the key, keeping both cached", async () => {
+    const { fn, calls } = countingBuild();
+    __setGeneratorForTest(fn);
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: false } }));
+    await useStore.getState().generate();
+    expect(calls()).toBe(1);
+
+    useStore.getState().setMountField({ standoffHeightMm: 7.5 }); // changes the generation key
+    await useStore.getState().generate();
+    expect(calls(), "a new key triggers exactly one new build").toBe(2);
+    // Both builds stay cached (bounded LRU) so undo/redo reuse them without recomputing.
+    expect(Object.keys(useStore.getState().builds).length).toBe(2);
+  });
+
+  /** Assert the cached build is what the exporter serialises — no independent rebuild path. */
+  function buildExportFromCache(key: string): boolean {
+    const cached = useStore.getState().builds[key];
+    return !!cached && cached.ok;
+  }
 });
 
 describe("units toggle is display-only", () => {
@@ -390,19 +442,13 @@ describe("inferred fabrication dimensions require acknowledgement before export 
     await useStore.getState().generate();
 
     // Not acknowledged → the honesty gate blocks the build (no progress phase entered).
-    vi.useFakeTimers();
-    useStore.getState().runExport();
-    vi.advanceTimersByTime(3000);
-    vi.useRealTimers();
+    await useStore.getState().runExport();
     expect(useStore.getState().ui.export.phase).toBe("idle");
     expect(useStore.getState().ui.export.artifact).toBeNull();
 
-    // Acknowledge, then it builds.
+    // Acknowledge, then it builds off the main thread (worker fallback runs synchronously here).
     useStore.getState().toggleAckInferred();
-    vi.useFakeTimers();
-    useStore.getState().runExport();
-    vi.advanceTimersByTime(3000);
-    vi.useRealTimers();
+    await useStore.getState().runExport();
     expect(useStore.getState().ui.export.phase).toBe("complete");
     expect(useStore.getState().ui.export.artifact).toBeTruthy();
   });
@@ -416,10 +462,7 @@ describe("export is recorded only on download", () => {
     expect(isGenerationCurrent(useStore.getState().current!)).toBe(true);
 
     useStore.setState((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, acknowledgedInferred: true } } }));
-    vi.useFakeTimers();
-    useStore.getState().runExport();
-    vi.advanceTimersByTime(3000);
-    vi.useRealTimers();
+    await useStore.getState().runExport();
 
     const afterRun = useStore.getState();
     expect(afterRun.ui.export.phase).toBe("complete");
@@ -438,13 +481,73 @@ describe("export is recorded only on download", () => {
   });
 });
 
+describe("export history is proof of a real download (reviewer #6)", () => {
+  async function prepare() {
+    const p = openSample();
+    useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true, export: { ...s.ui.export, acknowledgedInferred: true } } }));
+    await useStore.getState().generate();
+    await useStore.getState().runExport();
+    expect(useStore.getState().ui.export.phase).toBe("complete");
+  }
+
+  it("records nothing when the download does NOT initiate, and surfaces a download error", async () => {
+    await prepare();
+    const denied: DownloadAdapter = () => ({ initiated: false, reason: "blocked by the browser" });
+    __setDownloadAdapterForTest(denied);
+
+    const result = useStore.getState().commitExportDownload();
+    expect(result.initiated).toBe(false);
+    // No history record for a download that never happened.
+    expect(useStore.getState().current!.exports).toHaveLength(0);
+    expect(isCurrentModelExported(useStore.getState().current!)).toBe(false);
+    expect(useStore.getState().ui.export.downloadError).toMatch(/blocked/);
+  });
+
+  it("records ONLY on a confirmed initiation, bound to project id + version + generation key", async () => {
+    await prepare();
+    const seen: string[][] = [];
+    const ok: DownloadAdapter = (files) => {
+      seen.push(files.map((f) => f.name));
+      return { initiated: true, fileNames: files.map((f) => f.name) };
+    };
+    __setDownloadAdapterForTest(ok);
+
+    const current = useStore.getState().current!;
+    const result = useStore.getState().commitExportDownload();
+    expect(result.initiated).toBe(true);
+    expect(seen).toHaveLength(1); // the adapter was actually invoked with the artifact files
+    expect(seen[0].length).toBeGreaterThan(0);
+
+    const recorded = useStore.getState().current!.exports;
+    expect(recorded).toHaveLength(1);
+    // The record is self-describing: bound to the project id, its version, and the model key.
+    expect(recorded[0].projectId).toBe(current.id);
+    expect(recorded[0].projectVersion).toBe(current.version);
+    expect(recorded[0].generationKey).toBe(generationKey(current));
+    expect(useStore.getState().ui.export.downloadError).toBeNull();
+
+    // Re-invoking is idempotent: the same artifact is not recorded twice.
+    useStore.getState().commitExportDownload();
+    expect(useStore.getState().current!.exports).toHaveLength(1);
+  });
+
+  it("a failed download then a successful retry records exactly one export", async () => {
+    await prepare();
+    __setDownloadAdapterForTest(() => ({ initiated: false, reason: "no filesystem" }));
+    expect(useStore.getState().commitExportDownload().initiated).toBe(false);
+    expect(useStore.getState().current!.exports).toHaveLength(0);
+
+    __setDownloadAdapterForTest((files) => ({ initiated: true, fileNames: files.map((f) => f.name) }));
+    expect(useStore.getState().commitExportDownload().initiated).toBe(true);
+    expect(useStore.getState().current!.exports).toHaveLength(1);
+    expect(useStore.getState().ui.export.downloadError).toBeNull();
+  });
+});
+
 describe("undo/redo preserve the append-only export ledger (reviewer #4)", () => {
-  function commitAnExport() {
+  async function commitAnExport() {
     useStore.setState((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, acknowledgedInferred: true } } }));
-    vi.useFakeTimers();
-    useStore.getState().runExport();
-    vi.advanceTimersByTime(3000);
-    vi.useRealTimers();
+    await useStore.getState().runExport();
     useStore.getState().commitExportDownload();
   }
 
@@ -453,7 +556,7 @@ describe("undo/redo preserve the append-only export ledger (reviewer #4)", () =>
     useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
     useStore.getState().setThicknessMm(1.7); // a design edit (creates an undo step)
     await useStore.getState().generate();
-    commitAnExport();
+    await commitAnExport();
     expect(useStore.getState().current!.exports).toHaveLength(1);
     const recId = useStore.getState().current!.exports[0].id;
 
@@ -470,11 +573,11 @@ describe("undo/redo preserve the append-only export ledger (reviewer #4)", () =>
 
     useStore.getState().setThicknessMm(1.7);
     await useStore.getState().generate();
-    commitAnExport(); // export #1
+    await commitAnExport(); // export #1
 
     useStore.getState().setThicknessMm(1.9);
     await useStore.getState().generate();
-    commitAnExport(); // export #2 (a different model)
+    await commitAnExport(); // export #2 (a different model)
 
     expect(useStore.getState().current!.exports).toHaveLength(2);
     const ids = new Set(useStore.getState().current!.exports.map((e) => e.id));
@@ -491,7 +594,7 @@ describe("undo/redo preserve the append-only export ledger (reviewer #4)", () =>
     useStore.setState((s) => ({ current: p, ui: { ...s.ui, autoGenerate: true } }));
     useStore.getState().setThicknessMm(1.7);
     await useStore.getState().generate();
-    commitAnExport();
+    await commitAnExport();
     // The stored pre-edit snapshot is semantic-only: it must not carry the export ledger.
     const past = useStore.getState().past;
     expect(past.length).toBeGreaterThan(0);

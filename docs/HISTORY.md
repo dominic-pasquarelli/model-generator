@@ -2,8 +2,8 @@
 title: History
 tier: record
 status: append-only
-updated: 2026-08-20
-audited: 2026-08-20
+updated: 2026-08-21
+audited: 2026-08-21
 related:
   - docs/NEXT.md
   - docs/audit-log.md
@@ -130,3 +130,19 @@ A second independent review (REQUEST CHANGES) accepted the direction but require
 Honesty boundary held: the STEP is still a *faceted* B-rep checked against internal properties, not an independent EXPRESS/AP214 kernel; the STL's slicer compatibility is unverified; Autodesk Fusion import and printed-part fit remain unrecorded (ADR 0006).
 
 Verified: 165 host-level unit tests (added tolerance-aware `poly2d` predicates, `triangulate` fail-closed cases, the production `auditMesh` gate, real-fillet + few-seat-bridge + boss-rim-crossing regressions, exact-build sidecar reconstruction + control-coverage, undo/redo export-ledger preservation, and the malicious-import + parse-through-migration + quota-failure suites) plus the Playwright journey pass; `tsc` and `vite build` are clean; doc-audit passes and its 10 unit tests pass.
+
+## 2026-08-21 - Fourth independent-review pass: one keyed async build service, fabrication model, download proof
+
+A fourth independent review (REQUEST CHANGES) accepted the direction but required the generation/validation/export pipeline to be unified off the main thread and several honesty gaps closed. All seven items were implemented end-to-end, not narrowed.
+
+- **One keyed async geometry build service (#1):** the full `buildBracketMesh` now runs in a Web Worker (`geometryWorker.ts` via `buildClient.ts`), keyed by the canonical generation key and cached in the store, so the live preview, semantic validation, and both exporters consume the SAME immutable build instead of each recomputing the mesh synchronously on the main thread. Validation no longer runs the kernel — it reads the keyed build STATUS to tell a coded failure from a stale generation. Cancellation is a real `AbortSignal` → `terminate()` hard stop, and superseding edits hard-cancel older in-flight builds. STL/STEP serialization + artifact hashing moved off-thread as a separate cancellable job (`exportWorker.ts` via `exportClient.ts`) that streams real per-stage progress (build → serialise → hash), not a synthetic timer. The thin `GeometryAdapter`/`solidGenerator`/`workerGenerator`/`mockGenerator` wrappers were removed once the store owned the keyed build directly; tests inject a `BuildFn` seam. A unit integration test proves ONE build per key is shared by preview + generation and reused across an unchanged key.
+- **Explicit fastener fabrication model (#3):** the standoff bore is resolved per hole from a named, versioned fastener-profile table (M2..M4 × heat-set / self-tapping / through-bolt), never a magic factor and never board hole diameter; the heat-set == through-bolt conflation and the 0.8 factor are gone; a `custom` fastener with no bore blocks, and a per-hole measured bore override wins. Board thickness is a recorded measurement, not a geometry input, and no longer enters the generation key. The sidecar records requested-vs-effective bore per standoff with provenance.
+- **Keep-out Z-interval semantics (#4):** a bottom-side keep-out whose clearance is shorter than the standoff gap resolves as *satisfied-no-material* (nothing to cut) instead of a spurious block; unknown clearance is treated conservatively as reaching the plate. The "extends past the board edge" copy is reconciled with the enforced geometry — a bottom-side keep-out crossing the plate edge is a caution (it blocks), a top-side one is inherently clear.
+- **Side tabs as a hard structural contract (#5):** a tab is emitted at its full requested width or generation fails closed (`TAB_PLACEMENT_FAILED`) — no silent narrowing — and the report carries requested and effective dimensions.
+- **Parser/serializer closure (#2):** every UI-created state round-trips through the parser (SVG references are rasterised to PNG before storage rather than quarantined on reopen; `addHole`/`addKeepOut` enforce the parser caps; a round-trip guard blocks a project-file export that would not re-open; version/timestamp headroom removes the `MAX_SAFE_INTEGER` edit-throw landmine).
+- **Export-history download proof (#6):** downloads go through a typed, injectable adapter that reports genuine initiation; an export is recorded in history ONLY on a confirmed initiation, and the record is bound to the project id + version + generation key. Injected-adapter tests prove a failed download records nothing.
+- **CI evidence gate (#7):** a GitHub Actions workflow runs typecheck, unit tests, build, Playwright e2e, and the doc-audit check + its unit tests on the exact PR head.
+
+Honesty boundary held: the STEP is still a *faceted* B-rep checked against internal properties, not an independent EXPRESS/AP214 kernel; the STL's slicer compatibility is unverified; Autodesk Fusion import and printed-part fit remain unrecorded (ADR 0006).
+
+Verified: 245 host-level unit tests (added the keyed-build dedup/one-build-per-key integration cases, the download-proof injected-adapter cases, the fastener-profile matrix, the keep-out Z-interval matrix, the tab hard-contract cases, and the async-export cases) plus 11 Playwright cases; `tsc -b` and `vite build` are clean (two worker chunks emitted); doc-audit passes and its 10 unit tests pass.

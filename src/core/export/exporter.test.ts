@@ -2,11 +2,10 @@ import { describe, it, expect } from "vitest";
 import { createSampleProject } from "@/core/project/fixtures";
 import { assembleSolid, buildBracketMesh, hashMesh } from "@/core/geometry/mesh";
 import { generationKey } from "@/core/project/derive";
-import { solidGenerator } from "@/core/geometry/solidGenerator";
 import { defaultMount } from "@/core/project/schema";
 import { sha256Text } from "@/lib/sha256";
 import { measured } from "@/core/project/value";
-import type { MountStrategy, Project } from "@/core/project/types";
+import type { GeneratedModel, MountStrategy, Project } from "@/core/project/types";
 import { meshToStep, type StepMeta } from "./step";
 import { meshToAsciiStl } from "./stl";
 import { buildExport } from "./exporter";
@@ -19,10 +18,22 @@ const STEP_META: StepMeta = {
   originatingSystem: "s",
 };
 
+/** Record a CURRENT generation the way the store does — from one real build of the model. */
 async function withGeneration(p: Project): Promise<Project> {
-  const r = await solidGenerator.generate(p);
-  if (!r.ok) throw new Error(`generation failed: ${r.error.code}`);
-  return { ...p, generated: r.model };
+  const built = buildBracketMesh(p);
+  if (!built.ok) throw new Error(`generation failed: ${built.error.code}`);
+  const key = generationKey(p);
+  if (!key) throw new Error("model has no generation key");
+  const generated: GeneratedModel = {
+    sourceVersion: p.version,
+    key,
+    paramsHash: key,
+    dims: built.dims,
+    warnings: built.warnings,
+    createdAt: 1,
+    durationMs: null,
+  };
+  return { ...p, generated };
 }
 
 describe("export units are geometry-fixed, independent of display", () => {

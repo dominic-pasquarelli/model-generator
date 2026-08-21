@@ -197,6 +197,10 @@ export interface ExportRecord {
   /** Generation key of the model that was actually downloaded — lets the UI tell
    *  "this project has an export in history" from "the CURRENT model was exported". */
   generationKey: string;
+  /** Origin binding (reviewer #6): the project id + version this artifact was built from, so a
+   *  record is self-describing (id + version + generationKey) even lifted out of the project. */
+  projectId: string;
+  projectVersion: number;
   createdAt: number;
   wroteSidecar: boolean;
 }

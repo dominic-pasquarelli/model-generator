@@ -27,21 +27,106 @@ import { assessCalibration } from "@/core/units/units";
 import type { Unit } from "@/core/units/units";
 import type { StepId } from "@/core/validation/validate";
 import { blockingErrors, validateProject } from "@/core/validation/validate";
-import { mockGenerator } from "@/core/geometry/mockGenerator";
-import { workerGenerator } from "@/core/geometry/workerGenerator";
-import type { GeometryAdapter } from "@/core/geometry/adapter";
-import { buildExport, type ExportArtifact } from "@/core/export/exporter";
+import { requestBuild, __setBuildForTest, type BuildFn } from "@/core/geometry/buildClient";
+import type { MeshResult } from "@/core/geometry/mesh";
+import { requestExport } from "@/core/export/exportClient";
+import { type ExportArtifact } from "@/core/export/exporter";
+import type { GeneratedModel } from "@/core/project/types";
 import { uid } from "@/lib/id";
 
-// The active geometry adapter — the real self-contained solid generator in production.
-// A test seam lets a delayed or mock adapter be injected to exercise generation
-// superseding and to isolate store logic from geometry. The default is the worker-backed
-// adapter so real generation runs off the main thread and stays genuinely cancellable
-// (reviewer #3); it falls back to the synchronous solid generator where Workers are absent.
-let activeGenerator: GeometryAdapter = workerGenerator;
-/** @internal test-only: swap the adapter (pass nothing to reset to the mock). */
-export function __setGeneratorForTest(gen?: GeometryAdapter) {
-  activeGenerator = gen ?? mockGenerator;
+/**
+ * ONE worker-owned geometry build per generation key (reviewer #1). The store drives the build
+ * worker and caches the immutable result here; preview, validation, and export all read this
+ * cache instead of each recomputing the mesh synchronously on the main thread. A small bounded
+ * LRU keeps a few recent keys so undo/redo and quick edits reuse prior builds. Because the key
+ * is a content hash of the geometry-affecting model, a cached result is never stale — it is,
+ * by construction, the build of exactly that model.
+ */
+const BUILD_CACHE_LIMIT = 8;
+/** In-flight builds keyed by generation key; the controller hard-cancels the worker on abort. */
+const buildInflight = new Map<string, { controller: AbortController; promise: Promise<MeshResult> }>();
+/** Wall-clock build time (ms) per key, for the recorded generation's honest duration readout. */
+const buildElapsed = new Map<string, number>();
+
+function nowMs(): number {
+  const g = globalThis as { performance?: { now?: () => number } };
+  return g.performance?.now ? g.performance.now() : Date.now();
+}
+
+function cacheSet(builds: Record<string, MeshResult>, key: string, result: MeshResult): Record<string, MeshResult> {
+  const next: Record<string, MeshResult> = { ...builds, [key]: result };
+  const keys = Object.keys(next);
+  if (keys.length > BUILD_CACHE_LIMIT) delete next[keys[0]]; // evict oldest inserted
+  return next;
+}
+
+/**
+ * @internal test-only: inject a build implementation (pass nothing to reset to the worker).
+ * Swapping the generator invalidates every cached build (they were produced by the old one),
+ * so the cache + in-flight builds are cleared — a later request re-runs against the new impl.
+ */
+export function __setGeneratorForTest(fn?: BuildFn) {
+  __setBuildForTest(fn);
+  buildInflight.forEach((v) => v.controller.abort());
+  buildInflight.clear();
+  buildElapsed.clear();
+  try {
+    useStore.setState({ builds: {} });
+  } catch {
+    /* store not constructed yet */
+  }
+}
+
+/**
+ * Download proof (reviewer #6). Writing a file to disk is a side effect the store cannot verify
+ * itself, so it goes through a typed adapter that REPORTS whether the download initiated. The
+ * export is recorded in history ONLY on a confirmed initiation — history can never claim a
+ * download that never happened — and the adapter is injectable so the ledger logic is testable
+ * without a real browser download.
+ */
+export interface DownloadFile {
+  name: string;
+  text: string;
+  type: string;
+}
+export type DownloadResult = { initiated: true; fileNames: string[] } | { initiated: false; reason: string };
+export type DownloadAdapter = (files: DownloadFile[]) => DownloadResult;
+
+/** The real browser download: a Blob + object URL per file, reporting genuine initiation. */
+const browserDownload: DownloadAdapter = (files) => {
+  if (typeof document === "undefined" || typeof URL === "undefined" || !URL.createObjectURL) {
+    return { initiated: false, reason: "Downloads are unavailable in this environment." };
+  }
+  try {
+    for (const f of files) {
+      const blob = new Blob([f.text], { type: f.type });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = f.name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+    return { initiated: true, fileNames: files.map((f) => f.name) };
+  } catch (e) {
+    return { initiated: false, reason: e instanceof Error ? e.message : "The browser blocked the download." };
+  }
+};
+let downloadAdapter: DownloadAdapter = browserDownload;
+/** @internal test-only: inject a download adapter (pass nothing to reset to the browser one). */
+export function __setDownloadAdapterForTest(fn?: DownloadAdapter) {
+  downloadAdapter = fn ?? browserDownload;
+}
+
+/** The files a prepared artifact writes: the body, plus the sidecar when one was written. */
+function artifactFiles(artifact: ExportArtifact): DownloadFile[] {
+  const files: DownloadFile[] = [{ name: artifact.fileName, text: artifact.body, type: "application/octet-stream" }];
+  if (artifact.sidecar) {
+    files.push({ name: artifact.fileName.replace(/\.(step|stl)$/, ".meta.json"), text: artifact.sidecar, type: "application/json" });
+  }
+  return files;
 }
 
 export type Theme = "light" | "dark";
@@ -70,6 +155,9 @@ export interface ExportUiState {
   artifact: ExportArtifact | null;
   errorCode: string | null;
   errorDetail: string | null;
+  /** Set when a prepared artifact's download did NOT initiate (reviewer #6): the artifact stays
+   *  prepared and NO export is recorded, so history never claims a download that never happened. */
+  downloadError: string | null;
 }
 
 export interface DesignerUi {
@@ -216,6 +304,7 @@ function freshExportUi(): ExportUiState {
     artifact: null,
     errorCode: null,
     errorDetail: null,
+    downloadError: null,
   };
 }
 
@@ -250,12 +339,11 @@ const TOOL_FOR_STEP: Partial<Record<StepId, ToolId>> = {
 };
 
 let exportTimer: ReturnType<typeof setTimeout> | null = null;
-// Monotonic token so a newer generation supersedes an older in-flight one.
-let generationSeq = 0;
-// Cancellation handle for the in-flight generation. Aborting it terminates the geometry
-// worker (a real hard-cancel), so a superseding edit or an explicit cancel actually stops the
-// off-thread work rather than merely discarding its eventual result (reviewer #3).
-let generationAbort: AbortController | null = null;
+// Cancellation handle + monotonic token for the in-flight EXPORT job. Aborting terminates the
+// export worker mid-serialization (a real hard-cancel); the token discards a superseded job's
+// late result. Geometry-build cancellation is handled separately by `buildInflight` (reviewer #1).
+let exportAbort: AbortController | null = null;
+let exportSeq = 0;
 
 // Strictly-increasing edit timestamp so the revision chronology is always ordered, even for
 // rapid successive transitions (Date.now() can repeat within a millisecond). Anchored on the
@@ -426,9 +514,15 @@ export interface AppState {
    *  the same coded diagnostic deterministically for the preview/export/report. */
   generationError: { key: string; code: string; message: string; feature?: string } | null;
 
+  /** Worker-owned geometry build cache keyed by generation key (reviewer #1). Preview,
+   *  validation, and export all read the SAME build here rather than recomputing the mesh. */
+  builds: Record<string, MeshResult>;
+
   // generation + export
   generate: () => Promise<void>;
-  /** Hard-cancel any in-flight generation (terminates the geometry worker). */
+  /** Request a worker build of the current model into the cache (for preview/export of a draft). */
+  ensureBuild: () => void;
+  /** Hard-cancel any in-flight generation/build (terminates the geometry worker). */
   cancelGenerate: () => void;
   ensureGenerated: () => void;
   openExport: () => void;
@@ -440,8 +534,9 @@ export interface AppState {
   runExport: () => void;
   cancelExport: () => void;
   retryExport: () => void;
-  /** Record the export in history — ONLY after the browser download is initiated. */
-  commitExportDownload: () => void;
+  /** Download the prepared artifact and record it in history — the record is written ONLY on a
+   *  confirmed download initiation (reviewer #6). Returns the typed download result. */
+  commitExportDownload: () => DownloadResult;
 
   // persistence
   saveBoardToLibrary: () => PersistResult;
@@ -524,6 +619,41 @@ export const useStore = create<AppState>((set, get) => {
     return res;
   }
 
+  /**
+   * Kick (or reuse) ONE off-thread geometry build for `key` and cache the immutable result
+   * (reviewer #1). Deduplicates by key so preview, validation, and generation never race two
+   * builds of the same model; a newer wanted key hard-cancels older in-flight builds
+   * (terminates the worker). Returns the settled result (ABORTED when cancelled). Both the
+   * success and the coded FAILURE are cached so the preview/validation can render the real
+   * reason; only ABORTED is not cached. The key is a content hash, so a cache hit is never stale.
+   */
+  function runBuild(key: string, project: Project): Promise<MeshResult> {
+    const cached = get().builds[key];
+    if (cached) return Promise.resolve(cached);
+    const existing = buildInflight.get(key);
+    if (existing) return existing.promise;
+    // A newer wanted key supersedes older in-flight builds — hard-cancel them.
+    for (const [k, v] of buildInflight) {
+      if (k !== key) {
+        v.controller.abort();
+        buildInflight.delete(k);
+      }
+    }
+    const controller = new AbortController();
+    const started = nowMs();
+    const promise = requestBuild(project, controller.signal).then((result) => {
+      if (buildInflight.get(key)?.controller === controller) buildInflight.delete(key);
+      const aborted = (result.ok === false && result.error.code === "ABORTED") || controller.signal.aborted;
+      if (!aborted) {
+        buildElapsed.set(key, Math.round((nowMs() - started) * 100) / 100);
+        set((s) => ({ builds: cacheSet(s.builds, key, result) }));
+      }
+      return result;
+    });
+    buildInflight.set(key, { controller, promise });
+    return promise;
+  }
+
   function nextLabel(prefix: string, existing: { label: string }[]): string {
     let n = existing.length + 1;
     const has = (l: string) => existing.some((e) => e.label === l);
@@ -551,6 +681,7 @@ export const useStore = create<AppState>((set, get) => {
     lastSavedAt: null,
     lastSaveError: null,
     generationError: null,
+    builds: {},
     cursor: null,
     setCursor: (p) => set({ cursor: p }),
 
@@ -898,47 +1029,57 @@ export const useStore = create<AppState>((set, get) => {
       }),
 
     generate: async () => {
-      const current = get().current;
-      if (!current) return;
-      // Hard-cancel any in-flight generation before starting a newer one — this terminates
-      // the worker running the superseded build instead of leaving it to finish unused.
-      generationAbort?.abort();
-      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
-      generationAbort = controller;
-      const seq = ++generationSeq;
-      const result = await activeGenerator.generate(current, controller?.signal);
-      // Superseded by a newer generation, or the user switched projects → discard.
-      if (seq !== generationSeq) return;
-      if (generationAbort === controller) generationAbort = null;
+      const project = get().current;
+      if (!project) return;
+      const key = generationKey(project);
+      if (!key) return; // unresolved model (no calibration/outline) — nothing to build yet
+      // Drive the SAME keyed build service preview/validation use, then RECORD it as the
+      // project's generation. Deduped by key, so a build already kicked for the preview is
+      // reused rather than recomputed (reviewer #1).
+      const result = await runBuild(key, project);
+      // Stale rejection: an edit made during the async build changes the current model's key,
+      // so the result of the OLD model must not become the (new) project's generation.
       const latest = get().current;
-      if (!latest || latest.id !== current.id) return;
+      if (!latest || latest.id !== project.id || generationKey(latest) !== key) return;
       if (!result.ok) {
-        // A coded geometry failure is RECORDED, not silently dropped (reviewer #2). Keyed by
-        // the model it was computed for and only when that model is still current, so a later
-        // edit's status never shadows it and a stale error is ignored. ABORTED is a deliberate
-        // cancellation, not a failure.
-        const attemptedKey = generationKey(current);
-        if (result.error.code !== "ABORTED" && attemptedKey && generationKey(latest) === attemptedKey) {
-          set({ generationError: { key: attemptedKey, code: result.error.code, message: result.error.message, feature: result.error.feature } });
+        // A coded geometry failure is RECORDED, not silently dropped (reviewer #2), keyed by the
+        // model it was computed for. ABORTED is a deliberate cancellation, not a failure.
+        if (result.error.code !== "ABORTED") {
+          set({ generationError: { key, code: result.error.code, message: result.error.message, feature: result.error.feature } });
         }
         return;
       }
-      // Accept the result ONLY if the current model still hashes to what was generated.
-      // An edit made during the (async) adapter run changes the key → the stale result
-      // is discarded and cannot become the project's generation.
-      if (generationKey(latest) !== result.model.key) return;
-      const next = { ...latest, generated: result.model };
+      const model: GeneratedModel = {
+        sourceVersion: latest.version,
+        key,
+        paramsHash: key,
+        dims: result.dims,
+        warnings: result.warnings, // computed from the EFFECTIVE generated geometry
+        createdAt: Date.now(),
+        durationMs: buildElapsed.get(key) ?? null,
+      };
+      const next = { ...latest, generated: model };
       const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
       commit(projectsNext, { current: next, generationError: null });
     },
 
+    ensureBuild: () => {
+      // Cache a build for the current model WITHOUT recording it as the generation (preview
+      // and validation consume it). Idempotent: a no-op when already built or in flight.
+      const project = get().current;
+      if (!project) return;
+      const key = generationKey(project);
+      if (!key || get().builds[key]) return;
+      void runBuild(key, project);
+    },
+
     cancelGenerate: () => {
-      // Real cancellation: abort the controller → the worker adapter terminates the worker,
-      // stopping the in-flight synchronous build rather than waiting it out. Bump the seq so a
-      // late result from a non-worker fallback is discarded too.
-      generationAbort?.abort();
-      generationAbort = null;
-      generationSeq += 1;
+      // Real cancellation: abort every in-flight build controller → the build client terminates
+      // the worker, stopping the off-thread computation rather than waiting it out (reviewer #1).
+      for (const [k, v] of buildInflight) {
+        v.controller.abort();
+        buildInflight.delete(k);
+      }
     },
 
     ensureGenerated: () => {
@@ -957,6 +1098,9 @@ export const useStore = create<AppState>((set, get) => {
     },
     closeExport: () => {
       stopExportTimer();
+      exportAbort?.abort(); // terminate any in-flight export serialization
+      exportAbort = null;
+      exportSeq += 1;
       get().cancelGenerate(); // closing the dialog stops any generation it kicked off
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, open: false, phase: "idle", progress: 0 } } }));
     },
@@ -971,33 +1115,38 @@ export const useStore = create<AppState>((set, get) => {
       // dimensions the user has not explicitly acknowledged.
       if (inferredFabricationDims(current).length > 0 && !get().ui.export.acknowledgedInferred) return;
       const projectId = current.id; // finalize must apply to THIS project, not whatever is current later
-      // Honest stages reflecting real work: build the solid, serialise the body, sidecar.
-      const stages = ["Building solid from the canonical model", `Serialising ${get().ui.export.format.toUpperCase()} body`];
-      if (get().ui.export.writeSidecar) stages.push("Writing metadata sidecar");
-      let i = 0;
+      const options = { format: get().ui.export.format, writeSidecar: get().ui.export.writeSidecar };
+      // Hand the export worker the SAME build the geometry service already produced (reviewer
+      // #1): the serialization + SHA-256 hashing run off the main thread as a real cancellable
+      // job, and progress reflects completed stages, not a synthetic timer.
+      const key = generationKey(current);
+      const cached = key ? get().builds[key] : undefined;
+      const prebuilt = cached && cached.ok ? cached : undefined;
+
       stopExportTimer();
-      set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "progress", progress: 4, stage: stages[0] } } }));
-      const tick = () => {
-        // Abort if the user navigated to a different project mid-export.
+      exportAbort?.abort();
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      exportAbort = controller;
+      const seq = ++exportSeq;
+      set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "progress", progress: 4, stage: "Building solid from the canonical model", artifact: null, errorCode: null, errorDetail: null } } }));
+
+      return requestExport(current, options, {
+        prebuilt,
+        signal: controller?.signal,
+        onProgress: (progress, stage) => {
+          if (seq !== exportSeq) return; // superseded by a newer/cancelled run
+          const active = get().current;
+          if (!active || active.id !== projectId) return;
+          // Only advance a run still showing progress (a cancel/close resets the phase).
+          set((s) => (s.ui.export.phase === "progress" ? { ui: { ...s.ui, export: { ...s.ui.export, progress, stage } } } : {}));
+        },
+      }).then((outcome) => {
+        if (seq !== exportSeq) return; // superseded/cancelled — its UI is already reset
+        if (exportAbort === controller) exportAbort = null;
         const active = get().current;
-        if (!active || active.id !== projectId) {
-          stopExportTimer();
-          return;
-        }
-        i += 1;
-        const progress = Math.min(96, Math.round((i / (stages.length + 1)) * 100));
-        set((s) => ({
-          ui: { ...s.ui, export: { ...s.ui.export, progress, stage: stages[Math.min(i, stages.length - 1)] } },
-        }));
-        if (i < stages.length) {
-          exportTimer = setTimeout(tick, 380);
-          return;
-        }
-        // Finalize: prepare the artifact IN MEMORY only. No ExportRecord is written to
-        // project history until the user actually downloads (see commitExportDownload).
-        const opts = { format: get().ui.export.format, writeSidecar: get().ui.export.writeSidecar };
-        const built = buildExport(active, opts);
-        if (!built.ok) {
+        if (!active || active.id !== projectId) return; // user switched projects mid-export
+        if (outcome.status === "aborted") return;
+        if (outcome.status === "error") {
           set((s) => ({
             ui: {
               ...s.ui,
@@ -1005,33 +1154,51 @@ export const useStore = create<AppState>((set, get) => {
                 ...s.ui.export,
                 phase: "failed",
                 errorCode: "EXPORT_NOT_READY",
-                errorDetail: built.readiness.blockers.map((b) => b.title).join(" · ") || "Readiness gate failed.",
+                errorDetail: outcome.readiness.blockers.map((b) => b.title).join(" · ") || "Readiness gate failed.",
               },
             },
           }));
           return;
         }
-        set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "complete", progress: 100, artifact: built.artifact } } }));
-      };
-      exportTimer = setTimeout(tick, 380);
+        // Prepared IN MEMORY only. No ExportRecord is written to project history until the user
+        // actually downloads (see commitExportDownload).
+        set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "complete", progress: 100, artifact: outcome.artifact } } }));
+      });
     },
 
-    commitExportDownload: () => {
+    commitExportDownload: (): DownloadResult => {
       const art = get().ui.export.artifact;
       const current = get().current;
-      if (!art || !current) return;
-      if (current.exports.some((e) => e.id === art.record.id)) return; // already recorded
-      // Deliberate retention policy (reviewer #2): the ledger keeps the most recent MAX_EXPORTS
-      // records so it can never cross the parser cap and make the project un-openable. Newest
-      // first; older records are archived out rather than growing unbounded.
+      if (!art || !current) return { initiated: false, reason: "No prepared artifact to download." };
+
+      // Attempt the real download FIRST and record ONLY on a confirmed initiation (reviewer #6):
+      // a download that never started must never leave a history record claiming it did.
+      const result = downloadAdapter(artifactFiles(art));
+      if (!result.initiated) {
+        set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, downloadError: result.reason } } }));
+        return result;
+      }
+
+      set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, downloadError: null } } }));
+      if (current.exports.some((e) => e.id === art.record.id)) return result; // already recorded
+      // The record is bound to this project's id + version + generation key (reviewer #6), so
+      // it is self-describing. Deliberate retention policy (reviewer #2): the ledger keeps the
+      // most recent MAX_EXPORTS records so it can never cross the parser cap and make the
+      // project un-openable. Newest first; older records are archived out rather than growing.
       const next = { ...current, exports: [art.record, ...current.exports].slice(0, MAX_EXPORTS) };
       const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
       commit(projectsNext, { current: next });
+      return result;
     },
 
     cancelExport: () => {
       stopExportTimer();
-      get().cancelGenerate(); // Cancel truly stops in-flight generation, not just the timer
+      // Real cancellation: terminate the export worker mid-serialization and bump the token so a
+      // late result is discarded, then stop any generation it kicked off.
+      exportAbort?.abort();
+      exportAbort = null;
+      exportSeq += 1;
+      get().cancelGenerate();
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "idle", progress: 0, stage: "" } } }));
     },
     retryExport: () =>
@@ -1128,30 +1295,4 @@ export function boardMmToImage(project: Project, mm: Point): Point | null {
   const frame = boardFrame(project);
   if (!frame) return null;
   return boardMmToPxPoint(mm, frame);
-}
-
-/** Trigger a browser download of an export artifact (real for the sidecar). */
-export function downloadArtifact(artifact: ExportArtifact) {
-  if (typeof document === "undefined") return;
-  const files: Array<{ name: string; text: string; type: string }> = [
-    { name: artifact.fileName, text: artifact.body, type: "application/octet-stream" },
-  ];
-  if (artifact.sidecar) {
-    files.push({
-      name: artifact.fileName.replace(/\.(step|stl)$/, ".meta.json"),
-      text: artifact.sidecar,
-      type: "application/json",
-    });
-  }
-  for (const f of files) {
-    const blob = new Blob([f.text], { type: f.type });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement("a");
-    a.href = url;
-    a.download = f.name;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-  }
 }
