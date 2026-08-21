@@ -167,6 +167,30 @@ test("uploading a PNG persists the reference across a reload", async ({ page }) 
   await expect(page.getByText("board.png")).toBeVisible();
 });
 
+test("an oversized project file is rejected instantly and the UI stays responsive (reviewer #3)", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();
+
+  // A 13 MB blob, larger than the 12 MB project-file cap. The File.size pre-check must reject
+  // it WITHOUT reading the bytes into a string, so the tab never freezes on a hostile file.
+  const oversized = Buffer.alloc(13_000_000, 0x20);
+  const start = Date.now();
+  await page.locator('input[accept*=".mgproj"]').setInputFiles({
+    name: "huge.mgproj",
+    mimeType: "application/json",
+    buffer: oversized,
+  });
+
+  // Diagnosable rejection, promptly.
+  await expect(page.getByRole("alert").getByText(/larger than the .* MB limit/)).toBeVisible({ timeout: 5_000 });
+  expect(Date.now() - start).toBeLessThan(5_000);
+
+  // The main thread is still responsive: an unrelated control still works immediately.
+  const toggle = page.getByRole("button", { name: /Switch to (dark|light) theme/ });
+  await toggle.click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", /dark|light/);
+});
+
 test("changing a keep-out's shape keeps its geometry consistent", async ({ page }) => {
   await page.goto("/");
   await page.getByText("cm4-carrier-mount-a").click();

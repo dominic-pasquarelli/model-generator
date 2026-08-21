@@ -219,6 +219,70 @@ describe("numeric + structural import invariants (reviewer #4)", () => {
   });
 });
 
+describe("computational-safety import bounds (reviewer #3)", () => {
+  /** A simple, non-degenerate n-gon on a circle — a valid many-vertex ring. */
+  function circularPolygon(n: number, r = 100, cx = 300, cy = 300) {
+    return Array.from({ length: n }, (_, i) => {
+      const a = (i / n) * Math.PI * 2;
+      return { x: Math.round((cx + r * Math.cos(a)) * 1000) / 1000, y: Math.round((cy + r * Math.sin(a)) * 1000) / 1000 };
+    });
+  }
+
+  it("rejects more holes than the per-collection cap", () => {
+    const text = corruptFile((p) => (p.board.holes = Array.from({ length: 201 }, (_, i) => ({ ...p.board.holes[0], id: `h-${i}`, label: `H${i}` }))));
+    expect(() => parseProjectFile(text)).toThrow(/board\.holes \(count\)/);
+  });
+
+  it("rejects more keep-outs than the per-collection cap", () => {
+    const text = corruptFile((p) => (p.board.keepOuts = Array.from({ length: 201 }, (_, i) => ({ ...p.board.keepOuts[0], id: `k-${i}`, label: `K${i}` }))));
+    expect(() => parseProjectFile(text)).toThrow(/board\.keepOuts \(count\)/);
+  });
+
+  it("rejects a single ring above the lowered vertex cap", () => {
+    const text = corruptFile((p) => (p.board.outline.vertices = circularPolygon(513)));
+    expect(() => parseProjectFile(text)).toThrow(/outline\.vertices/);
+  });
+
+  it("rejects an aggregate over the total-work budget that every per-item cap would pass", () => {
+    // 20 polygon keep-outs × 400 vertices = 3.2M > 2M budget; each ring is under the 512 cap
+    // and there are well under 200 of them — ONLY the aggregate budget catches this.
+    const text = corruptFile(
+      (p) =>
+        (p.board.keepOuts = Array.from({ length: 20 }, (_, i) => ({
+          id: `ko-${i}`,
+          label: `KO-${i}`,
+          purpose: "x",
+          shape: "polygon",
+          boardSide: "top",
+          clearanceHeightMm: { known: false },
+          state: "measured",
+          polygonPx: circularPolygon(400),
+        }))),
+    );
+    expect(() => parseProjectFile(text)).toThrow(MgFileError);
+    expect(() => parseProjectFile(text)).toThrow(/IMPORT_TOO_COMPLEX|budget/);
+  });
+
+  it("accepts a detailed-but-bounded board (a 300-vertex polygon keep-out under budget)", () => {
+    const text = corruptFile(
+      (p) =>
+        (p.board.keepOuts = [
+          {
+            id: "ko-1",
+            label: "KO-1",
+            purpose: "detailed cutout",
+            shape: "polygon",
+            boardSide: "top",
+            clearanceHeightMm: { known: true, value: 5, source: "measured" },
+            state: "measured",
+            polygonPx: circularPolygon(300),
+          },
+        ]),
+    );
+    expect(() => parseProjectFile(text)).not.toThrow();
+  });
+});
+
 describe("v0 migration opens end-to-end through parseProjectFile (reviewer #5)", () => {
   it("a realistic pre-mount-strategy v0 file opens with a default mount and passes shape validation", () => {
     const v0 = JSON.stringify({

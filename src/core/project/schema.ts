@@ -15,14 +15,28 @@ import { inferred, unknownVal } from "./value";
 // any collection/coordinate/string within it) beyond these is rejected before geometry or
 // persistence work begins, so a hostile or corrupt file cannot exhaust memory or drive the
 // generator with absurd inputs.
-const MAX_FILE_BYTES = 12_000_000;
+/** Whole-file byte ceiling. Exported so the file picker can reject by File.size before it
+ *  ever reads the bytes into memory (reviewer #3). */
+export const MAX_FILE_BYTES = 12_000_000;
 const MAX_COORD = 1_000_000; // px magnitude for any stored coordinate
-const MAX_HOLES = 1_000;
-const MAX_KEEPOUTS = 1_000;
-const MAX_EXPORTS = 5_000;
-const MAX_RING_VERTICES = 5_000;
+// Per-collection caps sized to real boards, not the old defensive-but-huge values (reviewer
+// #3). A carrier board with 200 mounting holes or keep-outs is already implausible; combined
+// with the total-work budget below, this bounds the O(n²) simple-ring / feature-spacing work.
+const MAX_HOLES = 200;
+const MAX_KEEPOUTS = 200;
+const MAX_EXPORTS = 2_000;
+const MAX_RING_VERTICES = 512;
 const MAX_STRING = 8_192;
 const MAX_REF_SRC_BYTES = 12_000_000;
+/**
+ * Total-work budget across the whole board (reviewer #3): the sum of every ring's vertex
+ * count SQUARED (simple-polygon and spacing checks are O(v²)) plus holes×keep-outs pairwise
+ * work. Independent per-collection caps miss the "many rings each just under the cap" attack;
+ * this single budget bounds the aggregate. A generous real board (a 500-vertex outline + tens
+ * of small keep-outs + tens of holes) sits well under 2M; 200 rings near the vertex cap
+ * (≈52M) is rejected before any O(v²) work runs.
+ */
+const MAX_TOTAL_WORK = 2_000_000;
 /** Cap on the count of imported generated warnings (each also length-bounded by MAX_STRING). */
 const MAX_WARNINGS = 500;
 /** Upper bound for any imported timestamp (ms): 3000-01-01. Rejects absurd/far-future dates. */
@@ -394,6 +408,34 @@ function validateExportRecord(e: unknown, path: string): void {
   req(isBool(r.wroteSidecar), `${path}.wroteSidecar`);
 }
 
+/**
+ * Reject a file whose aggregate geometry work would be unsafe to process (reviewer #3),
+ * computed from cheap declared array lengths — never from any O(v²) traversal. The dominant
+ * costs are per-ring simple-polygon/spacing checks (O(v²) in a ring's vertex count) and the
+ * holes×keep-outs pairwise feature-spacing work; both are summed against a single budget so
+ * "many medium rings" cannot slip past the per-collection caps.
+ */
+function checkComplexityBudget(b: Record<string, unknown>): void {
+  const holes = Array.isArray(b.holes) ? (b.holes as unknown[]).length : 0;
+  const keepOuts = Array.isArray(b.keepOuts) ? (b.keepOuts as unknown[]) : [];
+  const ringCost = (v: unknown) => {
+    const len = Array.isArray(v) ? v.length : 0;
+    return len * len;
+  };
+  let ringWork = 0;
+  if (isObj(b.outline)) ringWork += ringCost((b.outline as Record<string, unknown>).vertices);
+  for (const k of keepOuts) {
+    if (isObj(k) && (k as Record<string, unknown>).shape === "polygon") ringWork += ringCost((k as Record<string, unknown>).polygonPx);
+  }
+  const total = ringWork + holes * keepOuts.length;
+  if (total > MAX_TOTAL_WORK) {
+    throw new MgFileError(
+      "IMPORT_TOO_COMPLEX",
+      `Project geometry work (${total}) exceeds the ${MAX_TOTAL_WORK} budget — too many or too-detailed holes, keep-outs, or outline vertices to process safely.`,
+    );
+  }
+}
+
 export function validateProjectShape(project: Record<string, unknown>): void {
   req(isBoundedStr(project.id), "id");
   req(isBoundedStr(project.name), "name");
@@ -411,6 +453,9 @@ export function validateProjectShape(project: Record<string, unknown>): void {
   req(isValNum(b.thicknessMm), "board.thicknessMm");
   req(Array.isArray(b.holes) && (b.holes as unknown[]).length <= MAX_HOLES, "board.holes (count)");
   req(Array.isArray(b.keepOuts) && (b.keepOuts as unknown[]).length <= MAX_KEEPOUTS, "board.keepOuts (count)");
+  // Enforce the aggregate work budget from cheap declared lengths BEFORE any O(v²) ring work
+  // runs (reviewer #3) — this catches "many rings each just under the per-ring cap".
+  checkComplexityBudget(b);
   (b.holes as unknown[]).forEach((h, i) => validateHole(h, `board.holes[${i}]`));
   (b.keepOuts as unknown[]).forEach((k, i) => validateKeepOut(k, `board.keepOuts[${i}]`));
   assertUniqueIds(b.holes as { id?: unknown }[], "board.holes");

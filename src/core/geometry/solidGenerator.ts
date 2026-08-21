@@ -18,26 +18,37 @@ function now(): number {
   return g.performance?.now ? g.performance.now() : 0;
 }
 
+/**
+ * The synchronous generation core, shared by the main-thread adapter and the Web Worker
+ * (geometryWorker.ts) so both produce byte-identical results. Builds the real solid, then
+ * derives the lightweight {@link GeneratedModel} metadata (dims/warnings/key/duration) the
+ * store records. The heavy mesh itself is discarded here — preview and export rebuild it on
+ * demand from the same deterministic path.
+ */
+export function generateModelSync(project: Project): GenerateResult {
+  const started = now();
+  const built = buildBracketMesh(project);
+  if (!built.ok) return { ok: false, error: built.error };
+
+  const key = generationKey(project); // non-null: buildBracketMesh already required a frame
+  const elapsed = now() - started;
+  const model: GeneratedModel = {
+    sourceVersion: project.version,
+    key: key ?? "",
+    paramsHash: key ?? "",
+    dims: built.dims,
+    warnings: built.warnings, // computed from the EFFECTIVE generated geometry
+    createdAt: Date.now(),
+    durationMs: Number.isFinite(elapsed) && elapsed > 0 ? Math.round(elapsed * 100) / 100 : null,
+  };
+  return { ok: true, model };
+}
+
 export const solidGenerator: GeometryAdapter = {
   name: ACTIVE_ADAPTER_VERSION,
   capabilities: { exactSolid: false, previewMesh: true, facetedStep: true },
   async generate(project: Project, signal?: AbortSignal): Promise<GenerateResult> {
     if (signal?.aborted) return { ok: false, error: { code: "ABORTED", message: "Generation cancelled." } };
-    const started = now();
-    const built = buildBracketMesh(project);
-    if (!built.ok) return { ok: false, error: built.error };
-
-    const key = generationKey(project); // non-null: buildBracketMesh already required a frame
-    const elapsed = now() - started;
-    const model: GeneratedModel = {
-      sourceVersion: project.version,
-      key: key ?? "",
-      paramsHash: key ?? "",
-      dims: built.dims,
-      warnings: built.warnings, // computed from the EFFECTIVE generated geometry
-      createdAt: Date.now(),
-      durationMs: Number.isFinite(elapsed) && elapsed > 0 ? Math.round(elapsed * 100) / 100 : null,
-    };
-    return { ok: true, model };
+    return generateModelSync(project);
   },
 };

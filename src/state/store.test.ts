@@ -132,6 +132,40 @@ describe("generation freshness under async races", () => {
   });
 });
 
+describe("generation is genuinely cancellable (reviewer #3)", () => {
+  it("cancelGenerate aborts the in-flight adapter signal and attaches no result", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    let sawAbort = false;
+    const delayed: GeometryAdapter = {
+      name: "delayed",
+      capabilities: { exactSolid: false, previewMesh: false },
+      async generate(project, signal) {
+        await gate;
+        if (signal?.aborted) {
+          sawAbort = true;
+          return { ok: false, error: { code: "ABORTED", message: "Generation cancelled." } };
+        }
+        return mockGenerator.generate(project, signal);
+      },
+    };
+    __setGeneratorForTest(delayed);
+
+    const p = openSample();
+    useStore.setState((s) => ({ ui: { ...s.ui, autoGenerate: false } }));
+    expect(p.generated).toBeNull();
+
+    const gp = useStore.getState().generate(); // captures the signal, then blocks on the gate
+    useStore.getState().cancelGenerate(); // real cancel: aborts the controller the worker watches
+    release();
+    await gp;
+
+    // The adapter observed a genuine abort, and no (aborted) result was attached.
+    expect(sawAbort, "the adapter's AbortSignal fired").toBe(true);
+    expect(useStore.getState().current!.generated ?? null).toBeNull();
+  });
+});
+
 describe("units toggle is display-only", () => {
   it("does not bump the model version, add an undo entry, or invalidate the generation", async () => {
     const p = openSample();

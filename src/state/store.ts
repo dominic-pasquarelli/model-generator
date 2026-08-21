@@ -27,15 +27,17 @@ import type { Unit } from "@/core/units/units";
 import type { StepId } from "@/core/validation/validate";
 import { blockingErrors, validateProject } from "@/core/validation/validate";
 import { mockGenerator } from "@/core/geometry/mockGenerator";
-import { solidGenerator } from "@/core/geometry/solidGenerator";
+import { workerGenerator } from "@/core/geometry/workerGenerator";
 import type { GeometryAdapter } from "@/core/geometry/adapter";
 import { buildExport, type ExportArtifact } from "@/core/export/exporter";
 import { uid } from "@/lib/id";
 
 // The active geometry adapter — the real self-contained solid generator in production.
 // A test seam lets a delayed or mock adapter be injected to exercise generation
-// superseding and to isolate store logic from geometry.
-let activeGenerator: GeometryAdapter = solidGenerator;
+// superseding and to isolate store logic from geometry. The default is the worker-backed
+// adapter so real generation runs off the main thread and stays genuinely cancellable
+// (reviewer #3); it falls back to the synchronous solid generator where Workers are absent.
+let activeGenerator: GeometryAdapter = workerGenerator;
 /** @internal test-only: swap the adapter (pass nothing to reset to the mock). */
 export function __setGeneratorForTest(gen?: GeometryAdapter) {
   activeGenerator = gen ?? mockGenerator;
@@ -245,6 +247,10 @@ const TOOL_FOR_STEP: Partial<Record<StepId, ToolId>> = {
 let exportTimer: ReturnType<typeof setTimeout> | null = null;
 // Monotonic token so a newer generation supersedes an older in-flight one.
 let generationSeq = 0;
+// Cancellation handle for the in-flight generation. Aborting it terminates the geometry
+// worker (a real hard-cancel), so a superseding edit or an explicit cancel actually stops the
+// off-thread work rather than merely discarding its eventual result (reviewer #3).
+let generationAbort: AbortController | null = null;
 
 // Strictly-increasing edit timestamp so the revision chronology is always ordered, even for
 // rapid successive transitions (Date.now() can repeat within a millisecond). Anchored on the
@@ -411,6 +417,8 @@ export interface AppState {
 
   // generation + export
   generate: () => Promise<void>;
+  /** Hard-cancel any in-flight generation (terminates the geometry worker). */
+  cancelGenerate: () => void;
   ensureGenerated: () => void;
   openExport: () => void;
   closeExport: () => void;
@@ -859,10 +867,16 @@ export const useStore = create<AppState>((set, get) => {
     generate: async () => {
       const current = get().current;
       if (!current) return;
+      // Hard-cancel any in-flight generation before starting a newer one — this terminates
+      // the worker running the superseded build instead of leaving it to finish unused.
+      generationAbort?.abort();
+      const controller = typeof AbortController !== "undefined" ? new AbortController() : null;
+      generationAbort = controller;
       const seq = ++generationSeq;
-      const result = await activeGenerator.generate(current);
+      const result = await activeGenerator.generate(current, controller?.signal);
       // Superseded by a newer generation, or the user switched projects → discard.
       if (seq !== generationSeq) return;
+      if (generationAbort === controller) generationAbort = null;
       const latest = get().current;
       if (!latest || latest.id !== current.id) return;
       if (!result.ok) return;
@@ -873,6 +887,15 @@ export const useStore = create<AppState>((set, get) => {
       const next = { ...latest, generated: result.model };
       const projectsNext = get().projects.map((p) => (p.id === next.id ? next : p));
       commit(projectsNext, { current: next });
+    },
+
+    cancelGenerate: () => {
+      // Real cancellation: abort the controller → the worker adapter terminates the worker,
+      // stopping the in-flight synchronous build rather than waiting it out. Bump the seq so a
+      // late result from a non-worker fallback is discarded too.
+      generationAbort?.abort();
+      generationAbort = null;
+      generationSeq += 1;
     },
 
     ensureGenerated: () => {
@@ -891,6 +914,7 @@ export const useStore = create<AppState>((set, get) => {
     },
     closeExport: () => {
       stopExportTimer();
+      get().cancelGenerate(); // closing the dialog stops any generation it kicked off
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, open: false, phase: "idle", progress: 0 } } }));
     },
     setExportFormat: (format) => set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, format } } })),
@@ -957,6 +981,7 @@ export const useStore = create<AppState>((set, get) => {
 
     cancelExport: () => {
       stopExportTimer();
+      get().cancelGenerate(); // Cancel truly stops in-flight generation, not just the timer
       set((s) => ({ ui: { ...s.ui, export: { ...s.ui.export, phase: "idle", progress: 0, stage: "" } } }));
     },
     retryExport: () =>

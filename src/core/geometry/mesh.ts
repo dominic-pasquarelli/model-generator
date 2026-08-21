@@ -175,6 +175,14 @@ export const WELD_EPS_MM = 1e-4;
  * would defeat round-trip-safe formatting (reviewer #5A).
  */
 export const MAX_DIMENSION_MM = 2000;
+/**
+ * Hard ceiling on emitted triangles (reviewer #3). The import boundary already bounds the
+ * INPUT (hole/keep-out/vertex caps + a total-work budget), so a real bracket lands far below
+ * this; the guard is a final backstop so no accepted-but-pathological input can hand the
+ * synchronous preview (WebGL) or the exporters a mesh large enough to freeze the tab or
+ * exhaust memory. Failing closed here beats shipping an unbounded array to three consumers.
+ */
+export const MAX_TRIANGLES = 500_000;
 
 const TOLERANCE_OFFSET: Record<Project["mount"]["tolerance"], number> = {
   "fdm-0.20": 0.2,
@@ -449,6 +457,8 @@ export function assembleSolid(recipe: SolidRecipe): { ok: true; mesh: BracketMes
   const body = s.build("bracket");
   const mesh = combine([body]);
   if (mesh.triangleCount === 0) return fail("EMPTY_SOLID", "Generation produced no geometry.");
+  if (mesh.triangleCount > MAX_TRIANGLES)
+    return fail("MESH_TOO_LARGE", `Generated solid has ${mesh.triangleCount} triangles, above the ${MAX_TRIANGLES}-triangle ceiling the preview and exporters support — simplify the board outline, holes, or keep-outs.`);
 
   const audit = auditMesh(mesh);
   if (!audit.ok) return fail(audit.code, `Generated solid failed the manifold audit (${audit.message}). This is a generator bug or an unsupported input combination — nothing was serialised.`);

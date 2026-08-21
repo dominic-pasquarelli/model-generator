@@ -5,6 +5,7 @@ import { Button, IconButton } from "@/components/ui/Button";
 import { Chip, StateChip } from "@/components/ui/Chip";
 import { TopBar, ThemeToggle } from "@/components/shell/TopBar";
 import type { Project } from "@/core/project/types";
+import { MAX_FILE_BYTES } from "@/core/project/schema";
 import { relativeTime } from "@/lib/format";
 import { useStore } from "@/state/store";
 import { ProjectThumb } from "./ProjectThumb";
@@ -74,6 +75,12 @@ export function LibraryPage() {
     setImportError(null);
     const file = files?.[0];
     if (!file) return;
+    // Reject oversized files by their declared size BEFORE reading any bytes into memory
+    // (reviewer #3): a multi-GB file must never be slurped into a string first.
+    if (file.size > MAX_FILE_BYTES) {
+      setImportError(`This file is ${(file.size / 1_000_000).toFixed(1)} MB, larger than the ${MAX_FILE_BYTES / 1_000_000} MB limit for a project file.`);
+      return;
+    }
     const reader = new FileReader();
     reader.onerror = () => setImportError("Could not read the file.");
     reader.onload = () => {
