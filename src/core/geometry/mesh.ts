@@ -168,6 +168,13 @@ export const TAB_BORE_RADIUS_MM = 2;
 export const FILLET_SEGMENTS = 8;
 /** Vertex weld quantum (mm): positions rounded to this collapse to one welded vertex. */
 export const WELD_EPS_MM = 1e-4;
+/**
+ * Realistic physical envelope (mm) for a board-mount bracket. A structurally valid but
+ * pathological project (e.g. an implausibly large calibration or outline) is rejected before
+ * it reaches the exporters, so the STL/STEP writers never see coordinates whose magnitude
+ * would defeat round-trip-safe formatting (reviewer #5A).
+ */
+export const MAX_DIMENSION_MM = 2000;
 
 const TOLERANCE_OFFSET: Record<Project["mount"]["tolerance"], number> = {
   "fdm-0.20": 0.2,
@@ -461,6 +468,8 @@ export function buildBracketMesh(project: Project): MeshResult {
   }
   const dims = outlineDims(project);
   if (!dims || dims.widthMm <= 0 || dims.heightMm <= 0) return fail("NO_DIMENSIONS", "Outline produced no measurable footprint.");
+  if (dims.widthMm > MAX_DIMENSION_MM || dims.heightMm > MAX_DIMENSION_MM)
+    return fail("DIMENSIONS_OUT_OF_RANGE", `Board footprint ${round2(dims.widthMm)}×${round2(dims.heightMm)} mm exceeds the ${MAX_DIMENSION_MM} mm envelope this tool supports — check the calibration and outline.`, "outline");
   if (project.board.holes.length === 0) return fail("NO_STANDOFFS", "At least one mounting hole is needed to place a standoff.", "holes");
 
   const m = project.mount;
@@ -477,6 +486,8 @@ export function buildBracketMesh(project: Project): MeshResult {
   if (!(standoffH > 0)) return fail("INVALID_MOUNT_HEIGHT", "Standoff height must be greater than zero.", "standoff height");
   if (!(boss > 0)) return fail("INVALID_BOSS", "Boss diameter must be greater than zero.", "boss diameter");
   if (clearance < 0) return fail("INVALID_CLEARANCE", "Fit clearance cannot be negative.", "clearance");
+  if (base > MAX_DIMENSION_MM || standoffH > MAX_DIMENSION_MM || boss > MAX_DIMENSION_MM || clearance > MAX_DIMENSION_MM)
+    return fail("DIMENSIONS_OUT_OF_RANGE", `A fabrication dimension exceeds the ${MAX_DIMENSION_MM} mm envelope this tool supports.`, "mount");
 
   const tolOffset = TOLERANCE_OFFSET[m.tolerance];
   const bossR = boss / 2;

@@ -8,18 +8,29 @@
  */
 import type { BracketMesh } from "@/core/geometry/mesh";
 
-/** Fixed 6-significant-digit formatting keeps output deterministic across machines. */
-function n(v: number): string {
+/**
+ * STL coordinate formatting at `sig` significant digits. Float32 positions need up to 9
+ * significant decimal digits to be recovered uniquely, so anything coarser (the previous 6)
+ * could collapse two distinct welded vertices onto the same token near large coordinates
+ * (~1000 mm) and turn a just-audited manifold into a zero-area / non-manifold triangle in the
+ * DOWNLOADED file. Nine digits is round-trip-safe and matches the STEP writer. Deterministic
+ * across machines. Exported (with `sig`) so tests can demonstrate the 6-vs-9 difference.
+ */
+export function formatStlCoord(v: number, sig = 9): string {
   if (!Number.isFinite(v)) return "0";
   // Normalise -0 and sub-nanometre noise to 0 so identical geometry serialises identically.
   let x = Object.is(v, -0) ? 0 : v;
   if (Math.abs(x) < 1e-9) x = 0;
-  let s = x.toPrecision(6);
+  let s = x.toPrecision(sig);
   if (/[eE]/.test(s)) return s; // exponent form is acceptable for STL
   // Trim trailing zeros ONLY within the fractional part — never digits of an integer
-  // (toPrecision(6) drops the decimal point for round integers ≥ 1e5).
+  // (toPrecision drops the decimal point for round integers ≥ 10^sig).
   if (s.includes(".")) s = s.replace(/0+$/, "").replace(/\.$/, "");
   return s;
+}
+
+function n(v: number): string {
+  return formatStlCoord(v, 9);
 }
 
 function facetNormal(ax: number, ay: number, az: number, bx: number, by: number, bz: number, cx: number, cy: number, cz: number): [number, number, number] {
