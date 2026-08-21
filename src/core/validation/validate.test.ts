@@ -180,13 +180,15 @@ describe("exportReadiness", () => {
     expect(exportReadiness(p, v).ready).toBe(false);
   });
 
-  it("does not claim keep-out avoidance when a standoff seat is clipped", async () => {
-    const p = createSampleProject(1_000_000); // KO-3 clips S4
+  it("labels generation warnings honestly, never as 'clipped standoff seats' (reviewer #1)", async () => {
+    const p = createSampleProject(1_000_000);
     const gen = await mockGenerator.generate(p);
     expect(gen.ok).toBe(true);
     if (gen.ok) p.generated = gen.model;
     const checklist = exportReadiness(p).checklist;
-    expect(checklist.some((c) => /clipped standoff seat/.test(c))).toBe(true);
-    expect(checklist.some((c) => /avoids all keep-outs/.test(c))).toBe(false);
+    // The old mislabel is gone; the count is described as generic warnings.
+    expect(checklist.some((c) => /clipped standoff seat/.test(c))).toBe(false);
+    const n = p.generated!.warnings.length;
+    expect(checklist.some((c) => (n === 0 ? /no warnings/ : /\bwarnings?\b/).test(c))).toBe(true);
   });
 });

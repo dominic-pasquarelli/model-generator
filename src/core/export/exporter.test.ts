@@ -100,6 +100,25 @@ describe("sidecar carries a full auditable parameter snapshot (reviewer #4)", ()
     expect(built.artifact.sidecar).toContain('"parameters"');
     expect(built.artifact.sidecar).toContain('"minBossWallMm"');
   });
+
+  it("carries each keep-out's enforceable-constraint contract (id, side, clearance, status)", async () => {
+    const project = await withGeneration(createSampleProject(1_000_000));
+    const built = buildExport(project, { format: "step", writeSidecar: true, now: 1 });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const kos = built.artifact.metadata.parameters.keepOuts;
+    expect(kos).toHaveLength(project.board.keepOuts.length);
+    for (const k of kos) {
+      expect(typeof k.id).toBe("string");
+      expect(["top", "bottom"]).toContain(k.boardSide);
+      expect(["honored-by-subtraction", "satisfied-no-material", "blocked", "unsupported-semantic"]).toContain(k.status);
+    }
+    // The sample's keep-outs are top-side, so each is satisfied with no material removed.
+    expect(kos.every((k) => k.status === "satisfied-no-material")).toBe(true);
+    // Ids join the sidecar back to the model's keep-outs.
+    expect(kos.map((k) => k.id).sort()).toEqual(project.board.keepOuts.map((k) => k.id).sort());
+    expect(built.artifact.sidecar).toContain('"status": "satisfied-no-material"');
+  });
 });
 
 describe("artifact integrity hash (reviewer #5B)", () => {

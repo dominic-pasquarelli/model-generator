@@ -35,6 +35,7 @@ import {
   offsetRingOutward,
   pointInRingStrict,
   ringContainsRing,
+  ringsOverlap,
   ringsSeparated,
   CONTACT_EPS,
   type Pt,
@@ -80,9 +81,26 @@ export interface TabReport {
   boreRadiusMm: number;
 }
 
+/**
+ * How a keep-out was resolved as an ENFORCEABLE constraint (reviewer #1):
+ * - honored-by-subtraction: its footprint overlapped bracket material and was cut away.
+ * - satisfied-no-material: no bracket material lies in its clearance volume (nothing to cut).
+ * - blocked: it intersects bracket material that cannot be removed → generation fails closed.
+ * - unsupported-semantic: it needs a clearance this generator cannot faithfully represent
+ *   (e.g. a partial-height pocket) → generation fails closed rather than pretend.
+ * Only the first two ever appear in a successful build; the latter two abort with a coded error.
+ */
+export type KeepOutStatus = "honored-by-subtraction" | "satisfied-no-material" | "blocked" | "unsupported-semantic";
+
 export interface KeepOutReport {
+  /** Stable keep-out id (the join key; labels are display text and can collide/rename). */
+  id: string;
   label: string;
-  subtracted: boolean;
+  boardSide: "top" | "bottom";
+  /** Requested clearance height (mm), or null when the user has not measured it. */
+  requestedClearanceHeightMm: number | null;
+  status: KeepOutStatus;
+  /** Human-readable resolution detail; null when honored with nothing to note. */
   reason: string | null;
 }
 
@@ -645,40 +663,54 @@ export function buildBracketMesh(project: Project): MeshResult {
     }
   }
 
-  // ---- Keep-outs: subtract interior footprints as through-holes. A hole that leaves the
-  // plate, or touches a boss/tab bore or an already-subtracted keep-out, is warned + skipped
-  // — holes must stay disjoint for the plate to triangulate to a single manifold. ----
+  // ---- Keep-outs are ENFORCEABLE constraints, not advisory annotations (reviewer #1). The
+  // bracket has material only on the board's underside (plate + standoffs + side tabs, all at
+  // or below the board plane), so a TOP-side keep-out is inherently clear, while a BOTTOM-side
+  // one faces the bracket and is honored by cutting its footprint through the plate. A keep-out
+  // that intersects material we cannot cleanly remove FAILS the build rather than shipping a
+  // bracket that violates it; a semantic we cannot represent faithfully also fails closed. ----
   const keepReports: KeepOutReport[] = [];
   const keepoutHoles: Pt[][] = [];
   for (const k of project.board.keepOuts) {
-    const ring = keepOutRing(k, frame);
-    if (!ring) {
-      keepReports.push({ label: k.label, subtracted: false, reason: "no usable footprint" });
+    const ch = maybe(k.clearanceHeightMm);
+    const head = { id: k.id, label: k.label, boardSide: k.boardSide, requestedClearanceHeightMm: ch ?? null };
+    const ring0 = keepOutRing(k, frame);
+    if (!ring0 || !isSimpleRing(ccw(ring0))) {
+      return fail("KEEPOUT_BLOCKED", `${k.label} has no usable or a self-intersecting footprint; it cannot be enforced as a keep-out.`, k.label);
+    }
+    const ring = ccw(ring0);
+
+    if (k.boardSide === "top") {
+      keepReports.push({ ...head, status: "satisfied-no-material", reason: "top-side clearance is above the board; the bracket sits entirely on the underside" });
       continue;
     }
-    const r = ccw(ring);
-    if (!isSimpleRing(r)) {
-      warnings.push(`${k.label} has a self-intersecting footprint — it was not subtracted.`);
-      keepReports.push({ label: k.label, subtracted: false, reason: "self-intersecting footprint" });
+
+    // Bottom side: the component projects toward the bracket.
+    if (mandatory.some((h) => !ringsSeparated(ring, h))) {
+      return fail("KEEPOUT_BLOCKED", `${k.label} overlaps a standoff or side-tab bore that must remain; the bracket would intrude into the keep-out. Move the keep-out or the conflicting feature.`, k.label);
+    }
+    if (!ringsOverlap(plate, ring)) {
+      keepReports.push({ ...head, status: "satisfied-no-material", reason: "footprint clears the plate and every feature" });
       continue;
     }
-    if (!ringContainsRing(plate, r)) {
-      warnings.push(`${k.label} extends past the plate edge — its footprint was not subtracted.`);
-      keepReports.push({ label: k.label, subtracted: false, reason: "extends past the plate edge" });
-      continue;
+    // The component reaches the plate only when its clearance spans the standoff gap. A known
+    // shorter clearance would need a partial-height relief above the plate that the flat
+    // full-depth footprint model cannot represent — fail closed rather than over- or under-cut.
+    if (ch != null && ch < standoffH) {
+      return fail(
+        "KEEPOUT_UNSUPPORTED",
+        `${k.label} is a bottom-side keep-out ${round2(ch)} mm tall, shorter than the ${round2(standoffH)} mm standoff gap. Enforcing only a partial-height clearance is not supported; increase its clearance to span the standoffs, or move it clear of the plate.`,
+        k.label,
+      );
     }
-    if (mandatory.some((h) => !ringsSeparated(r, h))) {
-      warnings.push(`${k.label} touches a standoff or tab bore — its footprint was not subtracted.`);
-      keepReports.push({ label: k.label, subtracted: false, reason: "touches a standoff or tab bore" });
-      continue;
+    if (!ringContainsRing(plate, ring)) {
+      return fail("KEEPOUT_BLOCKED", `${k.label} crosses the plate edge; it cannot be cut as a clean interior keep-out. Move it wholly inside or outside the plate footprint.`, k.label);
     }
-    if (keepoutHoles.some((h) => !ringsSeparated(r, h))) {
-      warnings.push(`${k.label} overlaps another keep-out — only the first of the overlap was subtracted.`);
-      keepReports.push({ label: k.label, subtracted: false, reason: "overlaps another keep-out" });
-      continue;
+    if (keepoutHoles.some((h) => !ringsSeparated(ring, h))) {
+      return fail("KEEPOUT_BLOCKED", `${k.label} overlaps another keep-out; merge or separate them so each can be cut cleanly.`, k.label);
     }
-    keepoutHoles.push(r);
-    keepReports.push({ label: k.label, subtracted: true, reason: null });
+    keepoutHoles.push(ring);
+    keepReports.push({ ...head, status: "honored-by-subtraction", reason: null });
   }
 
   // ---- Assemble + audit the single manifold from a pure-mm recipe. ----

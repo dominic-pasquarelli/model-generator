@@ -460,12 +460,11 @@ export function exportReadiness(project: Project, items = validateProject(projec
       `Board thickness measured · ${fmtLen(project.board.thicknessMm.value, project.units)} ${unitLabel(project.units)}`,
     );
   if (generationCurrent && project.generated) {
-    const clips = project.generated.warnings.length;
-    checklist.push(
-      clips === 0
-        ? "Generated bracket avoids all keep-outs"
-        : `Generated bracket with ${clips} clipped standoff seat${clips === 1 ? "" : "s"} (see warnings)`,
-    );
+    // These are general generation warnings (e.g. inferred fabrication dimensions), NOT
+    // "clipped standoff seats" — keep-outs are now enforced constraints that either resolve
+    // cleanly or block the build, so the old label misdescribed what the count means.
+    const n = project.generated.warnings.length;
+    checklist.push(n === 0 ? "Generated bracket with no warnings" : `Generated bracket with ${n} warning${n === 1 ? "" : "s"} (see warnings)`);
   }
   const summary = summarize(items);
   checklist.push(`${summary.errors} errors · ${summary.warnings} warnings · model v${project.version}`);

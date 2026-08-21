@@ -85,16 +85,19 @@ describe("buildBracketMesh — one connected watertight manifold", () => {
     });
   }
 
-  it("subtracts an interior keep-out and stays a single manifold (genus increases, still closed)", () => {
+  it("subtracts a bottom-side keep-out that reaches the plate and stays a single manifold", () => {
     const p = createSampleProject(1_000_000);
-    // A small keep-out well inside the board footprint.
+    // A bottom-side keep-out (facing the bracket) well inside the plate, clearance spanning
+    // the standoff gap so it reaches the plate → honored by a clean interior subtraction.
     p.board.keepOuts = [
-      { id: "k", label: "K1", purpose: "clr", shape: "rect", boardSide: "top", rectPx: { x: 450, y: 300, w: 60, h: 60 }, clearanceHeightMm: measured(5), state: "measured" },
+      { id: "k", label: "K1", purpose: "clr", shape: "rect", boardSide: "bottom", rectPx: { x: 450, y: 300, w: 60, h: 60 }, clearanceHeightMm: measured(10), state: "measured" },
     ];
-    const a = audit(build(p).mesh);
+    const r = build(p);
+    const a = audit(r.mesh);
     expect(a.boundaryEdges).toBe(0);
     expect(a.nonManifoldDirected).toBe(0);
     expect(a.components).toBe(1);
+    expect(r.effective.keepOuts[0].status).toBe("honored-by-subtraction");
   });
 
   it("rejects a hole placed off the plate footprint", () => {
@@ -268,5 +271,79 @@ describe("buildBracketMesh — fail-closed hardening (reviewer #1/#2)", () => {
     const again = assembleSolid(r.recipe);
     expect(again.ok).toBe(true);
     if (again.ok) expect(hashMesh(again.mesh)).toBe(r.meshHash);
+  });
+});
+
+describe("keep-outs are enforceable constraints with typed resolution (reviewer #1)", () => {
+  const ko = (over: Partial<Project["board"]["keepOuts"][number]>): Project["board"]["keepOuts"][number] => ({
+    id: "k",
+    label: "K1",
+    purpose: "clr",
+    shape: "rect",
+    boardSide: "bottom",
+    rectPx: { x: 450, y: 300, w: 60, h: 60 },
+    clearanceHeightMm: measured(10),
+    state: "measured",
+    ...over,
+  });
+  const withKeepOut = (over: Partial<Project["board"]["keepOuts"][number]>) => {
+    const p = createSampleProject(1_000_000);
+    p.board.keepOuts = [ko(over)];
+    return p;
+  };
+
+  it("top-side keep-out is satisfied without removing bracket material (bracket is on the underside)", () => {
+    const r = build(withKeepOut({ boardSide: "top" }));
+    const rep = r.effective.keepOuts[0];
+    expect(rep.status).toBe("satisfied-no-material");
+    expect(rep.boardSide).toBe("top");
+    expect(r.recipe.keepOutHoles).toHaveLength(0); // nothing cut
+  });
+
+  it("bottom-side keep-out clear of the plate is satisfied with no material", () => {
+    const r = build(withKeepOut({ rectPx: { x: 1100, y: 300, w: 60, h: 60 } })); // outside the plate
+    expect(r.effective.keepOuts[0].status).toBe("satisfied-no-material");
+    expect(r.recipe.keepOutHoles).toHaveLength(0);
+  });
+
+  it("bottom-side keep-out over the plate is honored by subtraction and carries its contract", () => {
+    const r = build(withKeepOut({ id: "ko-42", clearanceHeightMm: measured(12) }));
+    const rep = r.effective.keepOuts[0];
+    expect(rep.status).toBe("honored-by-subtraction");
+    expect(rep.id).toBe("ko-42");
+    expect(rep.boardSide).toBe("bottom");
+    expect(rep.requestedClearanceHeightMm).toBe(12);
+    expect(r.recipe.keepOutHoles).toHaveLength(1); // actually cut
+  });
+
+  it("BLOCKS export when a bottom-side keep-out overlaps a standoff that must remain", () => {
+    const r = buildBracketMesh(withKeepOut({ rectPx: { x: 90, y: 65, w: 60, h: 60 } })); // over hole H1
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("KEEPOUT_BLOCKED");
+  });
+
+  it("BLOCKS export when a bottom-side keep-out crosses the plate edge", () => {
+    const r = buildBracketMesh(withKeepOut({ rectPx: { x: 900, y: 300, w: 120, h: 60 } })); // straddles right edge
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("KEEPOUT_BLOCKED");
+  });
+
+  it("fails closed as UNSUPPORTED when a bottom-side keep-out is shorter than the standoff gap", () => {
+    const r = buildBracketMesh(withKeepOut({ clearanceHeightMm: measured(3) })); // 3 mm < 6 mm gap, over the plate
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("KEEPOUT_UNSUPPORTED");
+  });
+
+  it("BLOCKS export on a self-intersecting keep-out footprint", () => {
+    const bowtie = withKeepOut({ shape: "polygon", rectPx: undefined });
+    bowtie.board.keepOuts[0].polygonPx = [
+      { x: 450, y: 300 },
+      { x: 510, y: 360 },
+      { x: 510, y: 300 },
+      { x: 450, y: 360 },
+    ];
+    const r = buildBracketMesh(bowtie);
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.error.code).toBe("KEEPOUT_BLOCKED");
   });
 });

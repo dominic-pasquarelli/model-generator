@@ -17,7 +17,7 @@
  * a generated ASCII mesh; downstream slicer compatibility is not yet verified. Autodesk
  * Fusion import and printed-part fit remain unverified evidence gates (ADR 0006).
  */
-import { buildBracketMesh, MIN_BOSS_WALL_MM, type BracketMesh, type EffectiveParams, type EffectiveValue, type SolidRecipe } from "@/core/geometry/mesh";
+import { buildBracketMesh, MIN_BOSS_WALL_MM, type BracketMesh, type EffectiveParams, type EffectiveValue, type KeepOutStatus, type SolidRecipe } from "@/core/geometry/mesh";
 import { ACTIVE_ADAPTER_VERSION } from "@/core/geometry/adapter";
 import { generationKey } from "@/core/project/derive";
 import { GENERATOR_VERSION } from "@/core/project/types";
@@ -68,7 +68,7 @@ export interface ExportParameters {
   plateOutlineMm: { x: number; y: number }[];
   /** Requested board outline (mm) when the strategy consumes it, else null. */
   requestedOutlineMm: { x: number; y: number }[] | null;
-  keepOuts: { label: string; subtracted: boolean; reason: string | null }[];
+  keepOuts: { id: string; label: string; boardSide: "top" | "bottom"; requestedClearanceHeightMm: number | null; status: KeepOutStatus; reason: string | null }[];
   baseThicknessMm: ParamDimReport;
   standoffHeightMm: ParamDimReport;
   bossDiameterMm: ParamDimReport;
@@ -201,7 +201,14 @@ function buildParameters(project: Project, effective: EffectiveParams): ExportPa
     })),
     plateOutlineMm: effective.plateOutlineMm.map((p) => ({ x: p.x, y: p.y })),
     requestedOutlineMm: effective.requestedOutlineMm ? effective.requestedOutlineMm.map((p) => ({ x: p.x, y: p.y })) : null,
-    keepOuts: effective.keepOuts.map((k) => ({ label: k.label, subtracted: k.subtracted, reason: k.reason })),
+    keepOuts: effective.keepOuts.map((k) => ({
+      id: k.id,
+      label: k.label,
+      boardSide: k.boardSide,
+      requestedClearanceHeightMm: k.requestedClearanceHeightMm,
+      status: k.status,
+      reason: k.reason,
+    })),
     baseThicknessMm: paramDim(effective.baseThicknessMm, m.baseThicknessMm),
     standoffHeightMm: paramDim(effective.standoffHeightMm, m.standoffHeightMm),
     bossDiameterMm: paramDim(effective.bossDiameterMm, m.bossDiameterMm),
