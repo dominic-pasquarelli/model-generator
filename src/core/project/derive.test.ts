@@ -103,7 +103,7 @@ describe("isGenerationCurrent / isCurrentModelExported", () => {
   it("distinguishes 'has any export' from 'current model exported'", () => {
     const p = createSampleProject(1);
     const key = generationKey(p)!;
-    const rec: ExportRecord = { id: "e", format: "step", fileName: "x.step", sizeBytes: 1, paramsHash: key, generationKey: key, createdAt: 0, wroteSidecar: false };
+    const rec: ExportRecord = { id: "e", format: "step", fileName: "x.step", sizeBytes: 1, artifactSha256: "0".repeat(64), paramsHash: key, generationKey: key, createdAt: 0, wroteSidecar: false };
     p.exports = [rec];
     expect(isCurrentModelExported(p)).toBe(true);
 

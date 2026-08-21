@@ -151,7 +151,9 @@ export interface GeometryBuild {
   effective: EffectiveParams;
   /** Pure-mm recipe the mesh was assembled from — serialised into the sidecar. */
   recipe: SolidRecipe;
-  /** Deterministic hash of the welded solid, tying the sidecar to the serialised artifact. */
+  /** 32-bit FNV-1a determinism fingerprint of the welded solid — proves the same recipe
+   *  rebuilds the same mesh. NOT a cryptographic hash of the emitted file (that is the
+   *  exporter's SHA-256 over the artifact body). */
   meshHash: string;
 }
 
@@ -875,7 +877,7 @@ class UnionFind {
   }
 }
 
-// ---- deterministic mesh hash (ties the sidecar to the serialised artifact) ----
+// ---- deterministic mesh fingerprint (internal determinism check, NOT a file hash) ----
 
 /** FNV-1a over the welded positions (rounded to the weld quantum) and triangle indices. */
 export function hashMesh(mesh: BracketMesh): string {

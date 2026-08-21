@@ -404,6 +404,9 @@ function validateExportRecord(e: unknown, path: string): void {
   req(isObj(e), path);
   const r = e as Record<string, unknown>;
   req(isBoundedStr(r.id) && isBoundedStr(r.fileName) && isBoundedStr(r.paramsHash) && isBoundedStr(r.generationKey), `${path}.strings`);
+  // Optional so records written before the field existed still open; when present it must be
+  // a bounded string (the SHA-256 hex of the exported body).
+  req(r.artifactSha256 === undefined || isBoundedStr(r.artifactSha256), `${path}.artifactSha256`);
   req(isEnum(r.format, EXPORT_FORMATS), `${path}.format`);
   req(isSafeCount(r.sizeBytes) && isTimestamp(r.createdAt), `${path}.numbers (safe size, in-range timestamp)`);
   req(isBool(r.wroteSidecar), `${path}.wroteSidecar`);

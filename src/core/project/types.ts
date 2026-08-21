@@ -173,6 +173,8 @@ export interface ExportRecord {
   format: ExportFormat;
   fileName: string;
   sizeBytes: number;
+  /** SHA-256 (hex) of the exact exported artifact body — verifies the downloaded bytes. */
+  artifactSha256: string;
   paramsHash: string;
   /** Generation key of the model that was actually downloaded — lets the UI tell
    *  "this project has an export in history" from "the CURRENT model was exported". */

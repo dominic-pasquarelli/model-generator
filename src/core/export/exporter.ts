@@ -25,6 +25,7 @@ import type { ExportFormat, ExportRecord, GeneratedDimensions, Project } from "@
 import { isKnown, type Val } from "@/core/project/value";
 import { exportReadiness, type ExportReadiness } from "@/core/validation/validate";
 import { uid } from "@/lib/id";
+import { sha256Text } from "@/lib/sha256";
 import { meshToAsciiStl } from "./stl";
 import { meshToStep } from "./step";
 
@@ -92,8 +93,14 @@ export interface ExportMetadata {
   schemaVersion: number;
   project: { id: string; name: string; version: number };
   paramsHash: string | null;
-  /** Deterministic hash of the welded solid — ties this sidecar to the serialised body. */
+  /**
+   * 32-bit FNV-1a fingerprint of the welded solid's vertices/indices. An INTERNAL determinism
+   * check only (does the same recipe rebuild the same mesh) — NOT a cryptographic hash and not
+   * a hash of the emitted file. Use `artifactSha256` to verify the downloaded bytes.
+   */
   meshHash: string;
+  /** SHA-256 (hex) of the EXACT artifact body written to disk — the file-integrity hash. */
+  artifactSha256: string;
   format: ExportFormat;
   /** Units of the ARTIFACT geometry — always millimetres, independent of the UI. */
   geometryUnits: "mm";
@@ -123,8 +130,10 @@ const HONEST_NOTE =
   "(one component, every edge shared by exactly two oppositely-oriented triangles, single manifold vertex fans, " +
   "positive volume). STEP is a FACETED B-rep (curved standoff walls and bores are facets, not analytic surfaces); its " +
   "structure is checked against the internal properties in step.ts, NOT an independent EXPRESS/AP214 kernel. STL is a " +
-  "generated ASCII mesh; downstream slicer compatibility is not yet verified. `geometryRecipe` plus `meshHash` let the " +
-  "solid be reconstructed and checked. Autodesk Fusion import and printed-part fit are NOT yet verified (ADR 0006).";
+  "generated ASCII mesh; downstream slicer compatibility is not yet verified. `geometryRecipe` reconstructs the solid; " +
+  "`meshHash` is a 32-bit INTERNAL determinism fingerprint of the rebuilt mesh, while `artifactSha256` is the SHA-256 of " +
+  "the exact bytes of THIS file — use it, not meshHash, to verify the download. Autodesk Fusion import and printed-part " +
+  "fit are NOT yet verified (ADR 0006).";
 
 const UNSUPPORTED_CLAIMS = [
   "step-not-validated-by-independent-kernel",
@@ -214,8 +223,12 @@ function buildParameters(project: Project, effective: EffectiveParams): ExportPa
   };
 }
 
-/** Build the sidecar metadata from the immutable snapshot (never from project.generated). */
-export function buildMetadata(project: Project, format: ExportFormat, snapshot: ArtifactBuildSnapshot, nowIso: string): ExportMetadata {
+/**
+ * Build the sidecar metadata from the immutable snapshot (never from project.generated). The
+ * `artifactSha256` is the SHA-256 of the exact body this sidecar accompanies, so it must be
+ * computed from the already-serialised body and passed in — it cannot be derived from the mesh.
+ */
+export function buildMetadata(project: Project, format: ExportFormat, snapshot: ArtifactBuildSnapshot, nowIso: string, artifactSha256: string): ExportMetadata {
   const cal = project.calibration;
   return {
     tool: "board-mount-designer",
@@ -227,6 +240,7 @@ export function buildMetadata(project: Project, format: ExportFormat, snapshot: 
     project: { id: project.id, name: project.name, version: project.version },
     paramsHash: snapshot.generationKey || null,
     meshHash: snapshot.meshHash,
+    artifactSha256,
     format,
     geometry: format === "step" ? "faceted-brep" : "mesh",
     generatedDimensionsMm: { width: snapshot.dims.widthMm, depth: snapshot.dims.depthMm, height: snapshot.dims.heightMm },
@@ -308,8 +322,9 @@ export function buildExport(project: Project, options: ExportOptions): BuildExpo
 
   const nowIso = options.nowIso ?? new Date(options.now ?? Date.now()).toISOString();
   const now = options.now ?? Date.now();
-  const meta = buildMetadata(project, options.format, snapshot, nowIso);
 
+  // Serialise the body FIRST so the sidecar and record can carry the SHA-256 of the exact
+  // bytes that will be written (reviewer #5B) — a file-integrity hash, distinct from meshHash.
   const body =
     options.format === "step"
       ? meshToStep(snapshot.mesh, {
@@ -320,7 +335,9 @@ export function buildExport(project: Project, options: ExportOptions): BuildExpo
           originatingSystem: GENERATOR_VERSION,
         })
       : meshToAsciiStl(snapshot.mesh, safeProductName(project));
+  const artifactSha256 = sha256Text(body);
 
+  const meta = buildMetadata(project, options.format, snapshot, nowIso, artifactSha256);
   const sidecar = options.writeSidecar ? serializeSidecar(meta) : null;
   const fileName = exportFileName(project, options.format);
   const record: ExportRecord = {
@@ -328,6 +345,7 @@ export function buildExport(project: Project, options: ExportOptions): BuildExpo
     format: options.format,
     fileName,
     sizeBytes: new Blob([body]).size,
+    artifactSha256,
     paramsHash: snapshot.generationKey,
     generationKey: snapshot.generationKey,
     createdAt: now,

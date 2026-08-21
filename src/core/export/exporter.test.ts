@@ -4,6 +4,7 @@ import { assembleSolid, buildBracketMesh, hashMesh } from "@/core/geometry/mesh"
 import { generationKey } from "@/core/project/derive";
 import { solidGenerator } from "@/core/geometry/solidGenerator";
 import { defaultMount } from "@/core/project/schema";
+import { sha256Text } from "@/lib/sha256";
 import { measured } from "@/core/project/value";
 import type { MountStrategy, Project } from "@/core/project/types";
 import { meshToStep, type StepMeta } from "./step";
@@ -98,6 +99,42 @@ describe("sidecar carries a full auditable parameter snapshot (reviewer #4)", ()
     // The snapshot is serialised into the sidecar text, not just the in-memory object.
     expect(built.artifact.sidecar).toContain('"parameters"');
     expect(built.artifact.sidecar).toContain('"minBossWallMm"');
+  });
+});
+
+describe("artifact integrity hash (reviewer #5B)", () => {
+  it("records the SHA-256 of the EXACT body in the metadata, sidecar, and export record", async () => {
+    const project = await withGeneration(createSampleProject(1_000_000));
+    const built = buildExport(project, { format: "stl", writeSidecar: true, now: 1 });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const { body, metadata, record, sidecar } = built.artifact;
+
+    // The hash is of the downloaded bytes, computed independently here.
+    const expected = sha256Text(body);
+    expect(expected).toMatch(/^[0-9a-f]{64}$/);
+    expect(metadata.artifactSha256).toBe(expected);
+    expect(record.artifactSha256).toBe(expected);
+    expect(sidecar).toContain(`"artifactSha256": "${expected}"`);
+  });
+
+  it("is a real file hash distinct from the 32-bit internal mesh fingerprint", async () => {
+    const project = await withGeneration(createSampleProject(1_000_000));
+    const built = buildExport(project, { format: "step", writeSidecar: true, now: 1 });
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    expect(built.artifact.metadata.artifactSha256).not.toBe(built.artifact.metadata.meshHash);
+    // A single altered byte in the body yields a different SHA-256 (tamper-evident).
+    expect(sha256Text(built.artifact.body)).not.toBe(sha256Text(built.artifact.body + " "));
+  });
+
+  it("STL and STEP of the same solid hash differently (the hash is of the body, not the mesh)", async () => {
+    const project = await withGeneration(createSampleProject(1_000_000));
+    const stl = buildExport(project, { format: "stl", writeSidecar: false, now: 1 });
+    const step = buildExport(project, { format: "step", writeSidecar: false, now: 1 });
+    expect(stl.ok && step.ok).toBe(true);
+    if (!stl.ok || !step.ok) return;
+    expect(stl.artifact.metadata.artifactSha256).not.toBe(step.artifact.metadata.artifactSha256);
   });
 });
 
