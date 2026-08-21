@@ -2,14 +2,45 @@
 title: Audit Log
 tier: record
 status: append-only
-updated: 2026-08-20
-audited: 2026-08-20
+updated: 2026-08-21
+audited: 2026-08-21
 related:
   - docs/AUDIT.md
   - docs/DOC_SPEC.md
 ---
 
 # Audit Log
+
+## 2026-08-21 - Third-review hardening pass (PR #6)
+
+Scope: geometry generation, `.mgproj` import boundary, export honesty, and the geometry/STEP plans.
+
+Commands: `pnpm test` (unit), `pnpm typecheck`, `pnpm build`, `pnpm test:e2e`,
+`python3 tools/doc-audit/doc_audit.py --check`, `python3 -m unittest discover tools/doc-audit/tests`.
+
+Evidence:
+
+- STL coordinates are round-trip-safe (9 significant digits); the emitted STL re-welds and re-audits
+  as a single manifold. Sidecar and export record carry the SHA-256 of the exact artifact body,
+  distinct from the 32-bit internal `meshHash` fingerprint.
+- `.mgproj` import enforces safe-integer versions/counts, in-range timestamps, an aggregate work
+  budget, realistic collection caps, and a File.size pre-check before any read.
+- Generation runs in a Web Worker with a real `AbortSignal` → `terminate()` cancellation.
+- Keep-outs are enforceable constraints with four typed statuses; a keep-out intersecting bracket
+  material blocks export rather than being silently skipped.
+- Coded geometry failures are preserved end-to-end (preview, validation, export blocker, report),
+  never flattened into the generic stale blocker.
+- Custom tolerance is an explicit value (fail-closed when unset); inferred fabrication dimensions are
+  listed and require acknowledgement before export.
+
+Findings:
+
+- ERROR: none.
+- WARN: STEP is a FACETED B-rep validated only at the host/structural level, not against an
+  independent EXPRESS/AP214 kernel; the Autodesk Fusion import evidence gate and printed-part fit
+  remain unproven (ADR 0006).
+- INFO: the exact analytic B-rep kernel (ADR 0005 analytic path) remains Deferred; the shipped
+  generator is the single-manifold mesh path.
 
 ## 2026-08-16 - Foundation baseline
 
