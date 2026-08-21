@@ -174,6 +174,29 @@ test("uploading a PNG persists the reference across a reload", async ({ page }) 
   await expect(page.getByText("board.png")).toBeVisible();
 });
 
+test("uploading an SVG rasterises it and the project round-trips (reviewer #2)", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("button", { name: "New project", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Add a board reference" })).toBeVisible();
+
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="24" height="12"><rect width="24" height="12" fill="red"/></svg>';
+  await page.locator('input[type="file"]').setInputFiles({
+    name: "board.svg",
+    mimeType: "image/svg+xml",
+    buffer: Buffer.from(svg),
+  });
+
+  // The SVG is rasterised to its intrinsic size and accepted (not quarantined).
+  await expect(page.getByText("board.svg")).toBeVisible();
+  await expect(page.getByText(/24 × 12 px/)).toBeVisible();
+
+  // Reload: the app CREATED this state, so it must reopen it — a raw SVG data URL would have
+  // been rejected by the parser here. Its presence proves it round-tripped as a raster asset.
+  await page.reload();
+  await page.getByText("untitled-mount").first().click();
+  await expect(page.getByText("board.svg")).toBeVisible();
+});
+
 test("an oversized project file is rejected instantly and the UI stays responsive (reviewer #3)", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Projects" })).toBeVisible();

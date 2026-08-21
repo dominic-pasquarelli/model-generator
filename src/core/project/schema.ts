@@ -29,7 +29,9 @@ export const MAX_KEEPOUTS = 200;
 export const MAX_EXPORTS = 2_000;
 const MAX_RING_VERTICES = 512;
 export const MAX_STRING = 8_192;
-const MAX_REF_SRC_BYTES = 12_000_000;
+/** Max stored reference-image `src` length. Exported so the image picker bounds the raw file
+ *  (accounting for base64 expansion) and the rasterised SVG output before storing them. */
+export const MAX_REF_SRC_BYTES = 12_000_000;
 /**
  * Total-work budget across the whole board (reviewer #3): the sum of every ring's vertex
  * count SQUARED (simple-polygon and spacing checks are O(v²)) plus holes×keep-outs pairwise
